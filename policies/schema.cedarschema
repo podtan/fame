@@ -1,0 +1,78 @@
+entity Podtan::Role = {
+    name?: String,
+};
+
+entity Podtan::SemanticMemory = {
+    title?: String,
+    domain?: String,
+};
+
+entity Podtan::EpisodicMemory = {
+    title?: String,
+    domain?: String,
+};
+
+entity Podtan::ProceduralMemory = {
+    title?: String,
+    domain?: String,
+};
+
+action Podtan::Action::"CreateSemanticMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::SemanticMemory,
+};
+
+action Podtan::Action::"ViewSemanticMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::SemanticMemory,
+};
+
+action Podtan::Action::"EditSemanticMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::SemanticMemory,
+};
+
+action Podtan::Action::"DeleteSemanticMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::SemanticMemory,
+};
+
+action Podtan::Action::"CreateEpisodicMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::EpisodicMemory,
+};
+
+action Podtan::Action::"ViewEpisodicMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::EpisodicMemory,
+};
+
+action Podtan::Action::"EditEpisodicMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::EpisodicMemory,
+};
+
+action Podtan::Action::"DeleteEpisodicMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::EpisodicMemory,
+};
+
+action Podtan::Action::"CreateProceduralMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::ProceduralMemory,
+};
+
+action Podtan::Action::"ViewProceduralMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::ProceduralMemory,
+};
+
+action Podtan::Action::"EditProceduralMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::ProceduralMemory,
+};
+
+action Podtan::Action::"DeleteProceduralMemory" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::ProceduralMemory,
+};

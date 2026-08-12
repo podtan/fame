@@ -1,0 +1,61 @@
+[entity]
+name = "Semantic Memory"
+slug = "semantic-memory"
+title_prefix = "Semantic: "
+handler = "generic"
+
+[entity.default_tags]
+type = "agent-memory"
+memory-type = "semantic"
+
+[entity.cedar]
+action_create = "CreateSemanticMemory"
+action_read = "ViewSemanticMemory"
+action_edit = "EditSemanticMemory"
+action_delete = "DeleteSemanticMemory"
+
+[entity.fields.title]
+type = "text"
+required = true
+map = "title_suffix"
+in_views = ["list", "detail"]
+
+[entity.fields.content]
+type = "markdown"
+map = "content"
+in_views = ["detail"]
+
+[entity.fields.domain]
+type = "tag_array"
+map = "tag:domain"
+in_views = ["list", "detail"]
+
+[entity.fields.confidence]
+type = "metadata"
+map = "metadata:confidence"
+in_views = ["detail"]
+
+[entity.fields.source]
+type = "enum"
+values = ["agent-derived", "human", "episode-consolidated"]
+default = "agent-derived"
+map = "metadata:source"
+in_views = ["list", "detail"]
+
+[entity.fields.created_at]
+type = "date"
+map = "created_at"
+in_views = ["list", "detail"]
+
+[entity.fields.updated_at]
+type = "date"
+map = "updated_at"
+in_views = ["detail"]
+
+[entity.views.list]
+layout = "card"
+fields = ["title", "domain", "source", "updated_at"]
+
+[entity.views.detail]
+layout = "detail"
+fields = ["title", "content", "domain", "confidence", "source", "created_at", "updated_at"]

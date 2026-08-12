@@ -1,0 +1,73 @@
+[entity]
+name = "Episodic Memory"
+slug = "episodic-memory"
+title_prefix = "Episode: "
+handler = "generic"
+
+[entity.default_tags]
+type = "agent-memory"
+memory-type = "episodic"
+
+[entity.cedar]
+action_create = "CreateEpisodicMemory"
+action_read = "ViewEpisodicMemory"
+action_edit = "EditEpisodicMemory"
+action_delete = "DeleteEpisodicMemory"
+
+[entity.fields.title]
+type = "text"
+required = true
+map = "title_suffix"
+in_views = ["list", "detail"]
+
+[entity.fields.content]
+type = "markdown"
+map = "content"
+in_views = ["detail"]
+
+[entity.fields.domain]
+type = "tag_array"
+map = "tag:domain"
+in_views = ["list", "detail"]
+
+[entity.fields.outcome]
+type = "enum"
+values = ["success", "failure", "partial"]
+map = "tag:outcome"
+badge = true
+in_views = ["list", "detail"]
+
+[entity.fields.task_id]
+type = "text"
+map = "metadata:task_id"
+in_views = ["detail"]
+
+[entity.fields.duration_mins]
+type = "metadata"
+map = "metadata:duration_mins"
+in_views = ["detail"]
+
+[entity.fields.consolidated]
+type = "enum"
+values = ["true", "false"]
+default = "false"
+map = "metadata:consolidated"
+in_views = ["list", "detail"]
+
+[entity.fields.created_at]
+type = "date"
+map = "created_at"
+in_views = ["list", "detail"]
+
+[entity.fields.updated_at]
+type = "date"
+map = "updated_at"
+in_views = ["detail"]
+
+[entity.views.list]
+layout = "card"
+fields = ["title", "domain", "outcome", "consolidated", "created_at"]
+
+[entity.views.detail]
+layout = "detail"
+fields = ["title", "content", "domain", "outcome", "task_id", "duration_mins", "consolidated", "created_at", "updated_at"]

@@ -1,0 +1,83 @@
+[entity]
+name = "Procedural Memory"
+slug = "procedural-memory"
+title_prefix = "Procedure: "
+handler = "generic"
+
+[entity.default_tags]
+type = "agent-memory"
+memory-type = "procedural"
+
+[entity.cedar]
+action_create = "CreateProceduralMemory"
+action_read = "ViewProceduralMemory"
+action_edit = "EditProceduralMemory"
+action_delete = "DeleteProceduralMemory"
+
+[entity.fields.title]
+type = "text"
+required = true
+map = "title_suffix"
+in_views = ["list", "detail"]
+
+[entity.fields.content]
+type = "markdown"
+map = "content"
+in_views = ["detail"]
+
+[entity.fields.domain]
+type = "tag_array"
+map = "tag:domain"
+in_views = ["list", "detail"]
+
+[entity.fields.role]
+type = "tag_array"
+map = "tag:role"
+in_views = ["list", "detail"]
+
+[entity.fields.version]
+type = "metadata"
+map = "metadata:version"
+in_views = ["list", "detail"]
+
+[entity.fields.execution_count]
+type = "metadata"
+map = "metadata:execution_count"
+in_views = ["list", "detail"]
+
+[entity.fields.success_rate]
+type = "metadata"
+map = "metadata:success_rate"
+in_views = ["detail"]
+
+[entity.fields.source]
+type = "enum"
+values = ["seed", "agent-created", "episode-evolved"]
+default = "seed"
+map = "metadata:source"
+in_views = ["list", "detail"]
+
+[entity.fields.pending_update]
+type = "enum"
+values = ["true", "false"]
+default = "false"
+map = "metadata:pending_update"
+in_views = ["list", "detail"]
+
+[entity.fields.created_at]
+type = "date"
+map = "created_at"
+in_views = ["list", "detail"]
+
+[entity.fields.updated_at]
+type = "date"
+map = "updated_at"
+in_views = ["detail"]
+
+[entity.views.list]
+layout = "card"
+fields = ["title", "domain", "role", "version", "success_rate", "source"]
+
+[entity.views.detail]
+layout = "detail"
+fields = ["title", "content", "domain", "role", "version", "execution_count", "success_rate", "source", "pending_update", "created_at", "updated_at"]
