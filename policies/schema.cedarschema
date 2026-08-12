@@ -17,6 +17,11 @@ entity Podtan::ProceduralMemory = {
     domain?: String,
 };
 
+entity Podtan::AgentIdentity = {
+    title?: String,
+    agent_id?: String,
+};
+
 action Podtan::Action::"CreateSemanticMemory" appliesTo {
     principal: Podtan::Role,
     resource: Podtan::SemanticMemory,
@@ -75,4 +80,24 @@ action Podtan::Action::"EditProceduralMemory" appliesTo {
 action Podtan::Action::"DeleteProceduralMemory" appliesTo {
     principal: Podtan::Role,
     resource: Podtan::ProceduralMemory,
+};
+
+action Podtan::Action::"CreateAgentIdentity" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::AgentIdentity,
+};
+
+action Podtan::Action::"ViewAgentIdentity" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::AgentIdentity,
+};
+
+action Podtan::Action::"EditAgentIdentity" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::AgentIdentity,
+};
+
+action Podtan::Action::"DeleteAgentIdentity" appliesTo {
+    principal: Podtan::Role,
+    resource: Podtan::AgentIdentity,
 };

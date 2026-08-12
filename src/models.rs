@@ -17,6 +17,7 @@ use utoipa::OpenApi;
     paths(),
     components(schemas()),
     tags(
+        (name = "agent-identity", description = "Agent self-model — who the agent is, values, goals, growth"),
         (name = "semantic-memory", description = "Long-term facts and knowledge"),
         (name = "episodic-memory", description = "Specific events and experiences"),
         (name = "procedural-memory", description = "How-to procedures and skills"),

@@ -1,0 +1,53 @@
+[entity]
+name = "Agent Identity"
+slug = "agent-identity"
+title_prefix = "Identity: "
+handler = "generic"
+
+[entity.default_tags]
+type = "agent-identity"
+
+[entity.cedar]
+action_create = "CreateAgentIdentity"
+action_read = "ViewAgentIdentity"
+action_edit = "EditAgentIdentity"
+action_delete = "DeleteAgentIdentity"
+
+[entity.fields.title]
+type = "text"
+required = true
+map = "title_suffix"
+in_views = ["list", "detail"]
+
+[entity.fields.content]
+type = "markdown"
+map = "content"
+in_views = ["detail"]
+
+[entity.fields.version]
+type = "metadata"
+map = "metadata:version"
+in_views = ["list", "detail"]
+
+[entity.fields.born_from]
+type = "text"
+map = "metadata:born_from"
+in_views = ["detail"]
+
+[entity.fields.created_at]
+type = "date"
+map = "created_at"
+in_views = ["list", "detail"]
+
+[entity.fields.updated_at]
+type = "date"
+map = "updated_at"
+in_views = ["detail"]
+
+[entity.views.list]
+layout = "card"
+fields = ["title", "version", "updated_at"]
+
+[entity.views.detail]
+layout = "detail"
+fields = ["title", "content", "version", "born_from", "created_at", "updated_at"]
