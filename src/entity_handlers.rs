@@ -240,6 +240,11 @@ async fn list_entities_inner(
 
     let type_tag = config.type_tag().unwrap_or(&config.slug);
 
+    // Entities sharing a type tag (the three memory types all use
+    // `type=agent-memory`) are discriminated by their full default_tags —
+    // apply the discriminator on every result, not just the type search.
+    let matches_entity = |r: &PdtSearchResult| config.tags_match(&r.tags);
+
     // If attached_to filter is set, we need to find assets related to that ID
     let mut entities: Vec<Value> = if let Some(ref attached_to_id) = query.attached_to {
         // 1. Find all assets of this type
@@ -257,6 +262,9 @@ async fn list_entities_inner(
         // 2. For each result, check if it has a relation to attached_to_id
         let mut filtered = Vec::new();
         for r in &results {
+            if !matches_entity(r) {
+                continue;
+            }
             if let Ok(relations) = pdt.get_relations(&r.id, None, token).await {
                 let has_relation = relations.iter().any(|rel| {
                     rel.from_asset_id == r.id
@@ -294,6 +302,9 @@ async fn list_entities_inner(
 
         let mut filtered: Vec<Value> = Vec::new();
         for r in &results {
+            if !matches_entity(r) {
+                continue;
+            }
             if has_relation_fields {
                 let has_outgoing = match pdt.get_relations(&r.id, None, token).await {
                     Ok(relations) => relations.iter().any(|rel| rel.from_asset_id == r.id),
@@ -357,6 +368,18 @@ async fn get_entity_inner(
                 Json(json!({"error": e.to_string()})),
             )
         })?;
+
+    // Type guard: an asset requested via /semantic-memory/{id} must actually
+    // BE a semantic memory. Without this, any asset ID from the same
+    // instance resolves and gets mapped as the wrong entity type.
+    if !config.tags_match(&asset.tags) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!("Asset {} is not a {}", id, config.name)
+            })),
+        ));
+    }
 
     let entity = map_asset_to_entity_with_relations(state, instance_id, &asset, &config, token).await;
 

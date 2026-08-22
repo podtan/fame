@@ -8,6 +8,24 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::pdt::{PdtTag, PdtTagSummary};
+
+/// Common read access to (category, value) for both tag shapes.
+pub trait AsTagPair {
+    fn category(&self) -> &str;
+    fn value(&self) -> &str;
+}
+
+impl AsTagPair for PdtTag {
+    fn category(&self) -> &str { &self.category }
+    fn value(&self) -> &str { &self.value }
+}
+
+impl AsTagPair for PdtTagSummary {
+    fn category(&self) -> &str { &self.category }
+    fn value(&self) -> &str { &self.value }
+}
+
 /// The top-level entity file: `[entity] ...`
 #[derive(Debug, Clone, Deserialize)]
 pub struct EntityFile {
@@ -202,6 +220,26 @@ impl EntityConfig {
         self.default_tags.get("type").map(|s| s.as_str())
     }
 
+    /// Check whether an asset's tag set matches this entity's default_tags.
+    ///
+    /// Entities that share a `type` tag (the three memory types all use
+    /// `type=agent-memory`) are distinguished by their remaining default
+    /// tags (e.g. `memory-type=episodic`). Every discriminator in
+    /// default_tags must be present with the exact value; tags on the asset
+    /// that are not part of default_tags are ignored.
+    ///
+    /// Generic over PdtTag / PdtTagSummary — full assets and compact
+    /// search results carry the same (category, value) pairs.
+    pub fn tags_match<T: AsTagPair>(&self, asset_tags: &[T]) -> bool {
+        self.default_tags
+            .iter()
+            .all(|(category, value)| {
+                asset_tags
+                    .iter()
+                    .any(|t| t.category() == category && t.value() == value)
+            })
+    }
+
     /// Find all fields that should appear in a given view.
     pub fn fields_for_view(&self, view: &str) -> Vec<(&String, &FieldConfig)> {
         self.fields
@@ -322,6 +360,61 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
 
         assert_eq!(entity.type_tag(), Some("document"));
         assert_eq!(entity.default_status(), Some("draft"));
+    }
+
+    /// Regression for the cross-type memory leak: the three memory entities
+    /// share type=agent-memory and are discriminated ONLY by memory-type.
+    /// tags_match must require every default tag, and must work for both
+    /// the compact (search result) and full (asset) tag shapes.
+    #[test]
+    fn test_tags_match_discriminates_shared_type() {
+        let entity_toml = r#"
+            [entity]
+            name = "Episodic Memory"
+            slug = "episodic-memory"
+            title_prefix = "Episode: "
+            handler = "generic"
+
+            [entity.default_tags]
+            type = "agent-memory"
+            memory-type = "episodic"
+        "#;
+        let entity: EntityFile = toml::from_str(entity_toml).unwrap();
+        let entity = &entity.entity;
+
+        let summary = |c: &str, v: &str| PdtTagSummary {
+            category: c.to_string(),
+            value: v.to_string(),
+        };
+        let full = |c: &str, v: &str| PdtTag {
+            id: "t".into(),
+            category: c.to_string(),
+            value: v.to_string(),
+            added_by: String::new(),
+            added_at: String::new(),
+        };
+
+        // An episodic memory: has both discriminators → matches.
+        let episodic_summary = vec![summary("type", "agent-memory"), summary("memory-type", "episodic")];
+        assert!(entity.tags_match(&episodic_summary));
+
+        // A semantic memory: same type, different memory-type → must NOT match.
+        let semantic_summary = vec![summary("type", "agent-memory"), summary("memory-type", "semantic")];
+        assert!(!entity.tags_match(&semantic_summary));
+
+        // Missing the discriminator entirely → must NOT match.
+        let bare_summary = vec![summary("type", "agent-memory")];
+        assert!(!entity.tags_match(&bare_summary));
+
+        // Extra tags on the asset are ignored.
+        let noisy_summary = vec![summary("type", "agent-memory"), summary("memory-type", "episodic"), summary("outcome", "success")];
+        assert!(entity.tags_match(&noisy_summary));
+
+        // Same guarantees for the full-asset shape (PdtTag).
+        let episodic_full = vec![full("type", "agent-memory"), full("memory-type", "episodic")];
+        assert!(entity.tags_match(&episodic_full));
+        let semantic_full = vec![full("type", "agent-memory"), full("memory-type", "semantic")];
+        assert!(!entity.tags_match(&semantic_full));
     }
 
     #[test]
