@@ -1,6 +1,6 @@
 host = "0.0.0.0"
 port = 8628
-pdt_url = "http://localhost:8080"
+pdt_url = "http://localhost:8090"
 entity_dir = "entities"
 
 [auth]
