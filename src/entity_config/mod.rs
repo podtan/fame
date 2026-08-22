@@ -63,6 +63,29 @@ fn default_handler() -> String {
     "generic".to_string()
 }
 
+/// Convert an entity slug to a Cedar-safe entity type name.
+///
+/// Cedar entity type names are identifiers: they may not contain spaces or
+/// hyphens. Slugs are kebab-case ("semantic-memory"), display names contain
+/// spaces ("Semantic Memory") — neither works as a Cedar resource type.
+/// This maps "semantic-memory" → "SemanticMemory", matching the resource
+/// types declared in policies/schema.cedarschema.
+///
+/// Non-alphanumeric characters terminate the identifier part; everything
+/// after them is dropped, each surviving segment capitalized.
+pub fn slug_to_cedar_type(slug: &str) -> String {
+    slug.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let mut cs = s.chars();
+            match cs.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + cs.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Cedar authorization action names for this entity.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CedarActions {
@@ -542,5 +565,19 @@ slug = "test"
 "#;
         let file: EntityFile = toml::from_str(toml_str).unwrap();
         assert_eq!(file.entity.handler, "generic");
+    }
+
+    #[test]
+    fn test_slug_to_cedar_type() {
+        assert_eq!(slug_to_cedar_type("semantic-memory"), "SemanticMemory");
+        assert_eq!(slug_to_cedar_type("agent-identity"), "AgentIdentity");
+        assert_eq!(slug_to_cedar_type("procedural-memory"), "ProceduralMemory");
+        assert_eq!(slug_to_cedar_type("episodic-memory"), "EpisodicMemory");
+        // Leading/trailing separators and accidental spaces are tolerated
+        assert_eq!(slug_to_cedar_type(" semantic-memory "), "SemanticMemory");
+        assert_eq!(slug_to_cedar_type("a"), "A");
+        // Entity display names with spaces would be rejected by Cedar — this
+        // documents why the slug, not `name`, feeds the resource UID
+        assert_eq!(slug_to_cedar_type("Semantic Memory"), "SemanticMemory");
     }
 }

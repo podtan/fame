@@ -1,103 +1,63 @@
-entity Podtan::Role = {
+// Fame Cedar schema — EMPTY NAMESPACE (v0.1.2).
+//
+// CRITICAL: pep builds all Cedar UIDs WITHOUT a namespace:
+//   principal → User::"<sub>"        (pep::cedar::build_principal_uid)
+//   action    → Action::"<Name>"     (pep::cedar::build_action_uid)
+//   resource  → <Type>::"<id>"       (pep::cedar::entity::ResourceInfo)
+// This schema must therefore be empty-namespace too. The previous
+// Podtan::-namespaced form did not even parse ("unexpected token `::`"),
+// which made CedarAuthorizer init fail → fame booted FAIL-OPEN with zero
+// authorization checks (since v0.1.0).
+//
+// Resource types are derived from entity config slugs via
+// entity_config::slug_to_cedar_type ("semantic-memory" → SemanticMemory).
+// Cedar identifiers may not contain spaces or hyphens, so the display
+// `name` from the entity TOML ("Semantic Memory") cannot be used directly.
+
+entity User = {
+    email?: String,
     name?: String,
+    preferred_username?: String,
+    role?: String,
+    groups?: Set<String>,
 };
 
-entity Podtan::SemanticMemory = {
+entity SemanticMemory = {
     title?: String,
     domain?: String,
 };
 
-entity Podtan::EpisodicMemory = {
+entity EpisodicMemory = {
     title?: String,
     domain?: String,
 };
 
-entity Podtan::ProceduralMemory = {
+entity ProceduralMemory = {
     title?: String,
     domain?: String,
 };
 
-entity Podtan::AgentIdentity = {
+entity AgentIdentity = {
     title?: String,
     agent_id?: String,
 };
 
-action Podtan::Action::"CreateSemanticMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::SemanticMemory,
-};
+action "CreateSemanticMemory" appliesTo { principal: User, resource: SemanticMemory };
+action "ViewSemanticMemory" appliesTo { principal: User, resource: SemanticMemory };
+action "EditSemanticMemory" appliesTo { principal: User, resource: SemanticMemory };
+action "DeleteSemanticMemory" appliesTo { principal: User, resource: SemanticMemory };
 
-action Podtan::Action::"ViewSemanticMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::SemanticMemory,
-};
+action "CreateEpisodicMemory" appliesTo { principal: User, resource: EpisodicMemory };
+action "ViewEpisodicMemory" appliesTo { principal: User, resource: EpisodicMemory };
+action "EditEpisodicMemory" appliesTo { principal: User, resource: EpisodicMemory };
+action "DeleteEpisodicMemory" appliesTo { principal: User, resource: EpisodicMemory };
 
-action Podtan::Action::"EditSemanticMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::SemanticMemory,
-};
+action "CreateProceduralMemory" appliesTo { principal: User, resource: ProceduralMemory };
+action "ViewProceduralMemory" appliesTo { principal: User, resource: ProceduralMemory };
+action "EditProceduralMemory" appliesTo { principal: User, resource: ProceduralMemory };
+action "DeleteProceduralMemory" appliesTo { principal: User, resource: ProceduralMemory };
 
-action Podtan::Action::"DeleteSemanticMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::SemanticMemory,
-};
-
-action Podtan::Action::"CreateEpisodicMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::EpisodicMemory,
-};
-
-action Podtan::Action::"ViewEpisodicMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::EpisodicMemory,
-};
-
-action Podtan::Action::"EditEpisodicMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::EpisodicMemory,
-};
-
-action Podtan::Action::"DeleteEpisodicMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::EpisodicMemory,
-};
-
-action Podtan::Action::"CreateProceduralMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::ProceduralMemory,
-};
-
-action Podtan::Action::"ViewProceduralMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::ProceduralMemory,
-};
-
-action Podtan::Action::"EditProceduralMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::ProceduralMemory,
-};
-
-action Podtan::Action::"DeleteProceduralMemory" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::ProceduralMemory,
-};
-
-action Podtan::Action::"CreateAgentIdentity" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::AgentIdentity,
-};
-
-action Podtan::Action::"ViewAgentIdentity" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::AgentIdentity,
-};
-
-action Podtan::Action::"EditAgentIdentity" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::AgentIdentity,
-};
-
-action Podtan::Action::"DeleteAgentIdentity" appliesTo {
-    principal: Podtan::Role,
-    resource: Podtan::AgentIdentity,
-};
+action "CreateAgentIdentity" appliesTo { principal: User, resource: AgentIdentity };
+action "ViewAgentIdentity" appliesTo { principal: User, resource: AgentIdentity };
+action "EditAgentIdentity" appliesTo { principal: User, resource: AgentIdentity };
+action "DeleteAgentIdentity" appliesTo { principal: User, resource: AgentIdentity };

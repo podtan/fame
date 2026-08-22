@@ -1,78 +1,95 @@
-// Fame Cedar RBAC Policy
+// Fame Cedar RBAC policy — empty namespace, attribute-based roles (v0.1.2).
 //
-// Default policy: authenticated users can manage their own agent memories.
-// Agent isolation is enforced at the application level via the agent:{id} tag,
-// but Cedar provides an additional authorization layer based on user roles/groups.
+// Roles travel as the `role` attribute on the principal User entity, built
+// from JWT claims in cedar::entity::user_to_cedar_principal. The entities set
+// handed to the evaluator contains ONLY the principal (no Role hierarchy
+// entities, no parents), so a membership form like `principal in
+// Role::"admin"` would never match at runtime. Use the attribute form — the
+// same one NGHR runs in production:
+//     principal has role && principal.role == "admin"
+//
+// The `has` guard is required: accessing a missing attribute is an evaluation
+// error (→ HTTP 500), whereas `has` simply evaluates false.
+//
+// Default decision is DENY (pep CedarConfig), so anything not permitted here
+// is rejected with 403.
+//
+// Enforcement sites (see entity_handlers.rs): create + edit/status-update.
+// Reads remain gated by the auth layer and per-agent X-Instance-Id isolation.
 
 // Admin role — full access to all memory and identity operations
 permit (
-    principal in Podtan::Role::"admin",
+    principal,
     action in [
-        Podtan::Action::"CreateSemanticMemory",
-        Podtan::Action::"ViewSemanticMemory",
-        Podtan::Action::"EditSemanticMemory",
-        Podtan::Action::"DeleteSemanticMemory",
-        Podtan::Action::"CreateEpisodicMemory",
-        Podtan::Action::"ViewEpisodicMemory",
-        Podtan::Action::"EditEpisodicMemory",
-        Podtan::Action::"DeleteEpisodicMemory",
-        Podtan::Action::"CreateProceduralMemory",
-        Podtan::Action::"ViewProceduralMemory",
-        Podtan::Action::"EditProceduralMemory",
-        Podtan::Action::"DeleteProceduralMemory",
-        Podtan::Action::"CreateAgentIdentity",
-        Podtan::Action::"ViewAgentIdentity",
-        Podtan::Action::"EditAgentIdentity",
-        Podtan::Action::"DeleteAgentIdentity",
+        Action::"CreateSemanticMemory",
+        Action::"ViewSemanticMemory",
+        Action::"EditSemanticMemory",
+        Action::"DeleteSemanticMemory",
+        Action::"CreateEpisodicMemory",
+        Action::"ViewEpisodicMemory",
+        Action::"EditEpisodicMemory",
+        Action::"DeleteEpisodicMemory",
+        Action::"CreateProceduralMemory",
+        Action::"ViewProceduralMemory",
+        Action::"EditProceduralMemory",
+        Action::"DeleteProceduralMemory",
+        Action::"CreateAgentIdentity",
+        Action::"ViewAgentIdentity",
+        Action::"EditAgentIdentity",
+        Action::"DeleteAgentIdentity",
     ],
     resource
-);
+)
+when { principal has role && principal.role == "admin" };
 
 // Agent role — can create and view memories, view and edit own identity
 permit (
-    principal in Podtan::Role::"agent",
+    principal,
     action in [
-        Podtan::Action::"CreateSemanticMemory",
-        Podtan::Action::"ViewSemanticMemory",
-        Podtan::Action::"EditSemanticMemory",
-        Podtan::Action::"CreateEpisodicMemory",
-        Podtan::Action::"ViewEpisodicMemory",
-        Podtan::Action::"EditEpisodicMemory",
-        Podtan::Action::"CreateProceduralMemory",
-        Podtan::Action::"ViewProceduralMemory",
-        Podtan::Action::"EditProceduralMemory",
-        Podtan::Action::"ViewAgentIdentity",
-        Podtan::Action::"EditAgentIdentity",
+        Action::"CreateSemanticMemory",
+        Action::"ViewSemanticMemory",
+        Action::"EditSemanticMemory",
+        Action::"CreateEpisodicMemory",
+        Action::"ViewEpisodicMemory",
+        Action::"EditEpisodicMemory",
+        Action::"CreateProceduralMemory",
+        Action::"ViewProceduralMemory",
+        Action::"EditProceduralMemory",
+        Action::"ViewAgentIdentity",
+        Action::"EditAgentIdentity",
     ],
     resource
-);
+)
+when { principal has role && principal.role == "agent" };
 
 // Developer role — can view and create memories for debugging, view identity
 permit (
-    principal in Podtan::Role::"developer",
+    principal,
     action in [
-        Podtan::Action::"ViewSemanticMemory",
-        Podtan::Action::"ViewEpisodicMemory",
-        Podtan::Action::"ViewProceduralMemory",
-        Podtan::Action::"CreateSemanticMemory",
-        Podtan::Action::"CreateEpisodicMemory",
-        Podtan::Action::"CreateProceduralMemory",
-        Podtan::Action::"ViewAgentIdentity",
+        Action::"ViewSemanticMemory",
+        Action::"ViewEpisodicMemory",
+        Action::"ViewProceduralMemory",
+        Action::"CreateSemanticMemory",
+        Action::"CreateEpisodicMemory",
+        Action::"CreateProceduralMemory",
+        Action::"ViewAgentIdentity",
     ],
     resource
-);
+)
+when { principal has role && principal.role == "developer" };
 
 // Conductor role (L3) — can create, view, and edit identity for any agent.
 // This is the "upper layer agent" that births and evolves other agents.
 permit (
-    principal in Podtan::Role::"conductor",
+    principal,
     action in [
-        Podtan::Action::"CreateAgentIdentity",
-        Podtan::Action::"ViewAgentIdentity",
-        Podtan::Action::"EditAgentIdentity",
-        Podtan::Action::"ViewSemanticMemory",
-        Podtan::Action::"ViewEpisodicMemory",
-        Podtan::Action::"ViewProceduralMemory",
+        Action::"CreateAgentIdentity",
+        Action::"ViewAgentIdentity",
+        Action::"EditAgentIdentity",
+        Action::"ViewSemanticMemory",
+        Action::"ViewEpisodicMemory",
+        Action::"ViewProceduralMemory",
     ],
     resource
-);
+)
+when { principal has role && principal.role == "conductor" };

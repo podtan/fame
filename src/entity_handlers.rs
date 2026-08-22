@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tracing::info;
 
 use crate::auth::{AuthenticatedUser, ForwardedToken, InstanceContext};
-use crate::entity_config::EntityConfig;
+use crate::entity_config::{slug_to_cedar_type, EntityConfig};
 use crate::pdt::{CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset, PdtSearchResult};
 use crate::AppState;
 
@@ -404,11 +404,20 @@ async fn create_entity_inner(
     })?;
 
     // Cedar authorization check
+    // NOTE: resource type must be the slug-derived Cedar identifier ("SemanticMemory"),
+    // not config.name ("Semantic Memory") — spaces are illegal in Cedar type names
+    // and would fail UID construction with a 500.
     if let Some(ref authorizer) = state.authorizer {
         if let Some(ref action) = config.cedar.action_create {
             let claims = user.to_cedar_claims();
-            crate::cedar::enforcement::check_permission(authorizer, &claims, action, &config.name, "<_>")
-                .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
+            crate::cedar::enforcement::check_permission(
+                authorizer,
+                &claims,
+                action,
+                &slug_to_cedar_type(&config.slug),
+                "<_>",
+            )
+            .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
         }
     }
 
@@ -608,11 +617,18 @@ async fn update_entity_status_inner(
     })?;
 
     // Cedar authorization check
+    // Same slug-derived resource type as create (see note above).
     if let Some(ref authorizer) = state.authorizer {
         if let Some(ref action) = config.cedar.action_edit {
             let claims = user.to_cedar_claims();
-            crate::cedar::enforcement::check_permission(authorizer, &claims, action, &config.name, id)
-                .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
+            crate::cedar::enforcement::check_permission(
+                authorizer,
+                &claims,
+                action,
+                &slug_to_cedar_type(&config.slug),
+                id,
+            )
+            .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
         }
     }
 
