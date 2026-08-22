@@ -68,6 +68,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Initialize Cedar authorizer
+    //
+    // SECURITY: when cedar.enabled=true, a failed init is FATAL. Fame's whole
+    // authorization model assumes Cedar is enforcing; a fail-open boot would
+    // silently strip every check (the v0.1.0–0.1.1 failure mode). Deploy
+    // coordination must therefore include the tag-pin + cedar validate gate
+    // before any restart.
     let authorizer = if config.cedar.enabled {
         let cedar_config: pep::cedar::CedarConfig = config.cedar.clone().into();
         match pep::cedar::CedarAuthorizer::new_with_policy_store(cedar_config).await {
@@ -76,12 +82,22 @@ async fn main() -> anyhow::Result<()> {
                 Some(Arc::new(a))
             }
             Err(e) => {
-                tracing::error!("Failed to init Cedar: {}. Running without.", e);
-                None
+                tracing::error!(
+                    "FATAL: Cedar is enabled but failed to initialize: {}. \
+                     Refusing to start fail-open — fix the policy/schema and restart.",
+                    e
+                );
+                return Err(anyhow::anyhow!(
+                    "Cedar enabled but initialization failed: {}",
+                    e
+                ));
             }
         }
     } else {
-        tracing::info!("Cedar authorization disabled");
+        tracing::warn!(
+            "Cedar authorization disabled — every authz check is skipped (fail-open). \
+             Only acceptable for local development."
+        );
         None
     };
 
