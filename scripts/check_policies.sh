@@ -53,4 +53,14 @@ auth gate-admin  "$TMP/admin.json"  CreateSemanticMemory 'SemanticMemory::"<_>"'
 auth gate-viewer "$TMP/viewer.json" CreateSemanticMemory 'SemanticMemory::"<_>"' DENY
 auth gate-viewer "$TMP/viewer.json" DeleteAgentIdentity 'AgentIdentity::"<_>"'   DENY
 
+# 0.1.3: workspace-owner path — user gets identity CRUD + memory View,
+# never memory writes or deletes
+cat > "$TMP/user.json" <<'EOF'
+[{"uid": {"type": "User", "id": "gate-user"}, "attrs": {"role": "user"}, "parents": []}]
+EOF
+auth gate-user "$TMP/user.json" CreateAgentIdentity 'AgentIdentity::"<_>"'  ALLOW
+auth gate-user "$TMP/user.json" ViewSemanticMemory 'SemanticMemory::"<_>"'  ALLOW
+auth gate-user "$TMP/user.json" CreateSemanticMemory 'SemanticMemory::"<_>"' DENY
+auth gate-user "$TMP/user.json" DeleteAgentIdentity 'AgentIdentity::"<_>"'  DENY
+
 exit $fail

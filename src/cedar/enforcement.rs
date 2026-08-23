@@ -227,4 +227,74 @@ mod tests {
             Err(StatusCode::FORBIDDEN)
         );
     }
+
+    /// 0.1.3 regression test: the workspace-owner path. TOCPI forwards the
+    /// creating user's token when it stores an agent's identity charter in
+    /// fame; since Cedar enforcement went live (0.1.2) that call returned
+    /// 403 for role=user — agents were born with a silently missing
+    /// charter. user must now be permitted identity CRUD + memory View,
+    /// while staying denied for memory writes and deletes.
+    #[test]
+    fn cedar_user_role_identity_permits() {
+        let authorizer = pep::cedar::CedarAuthorizer::new(test_cedar_config())
+            .expect("Cedar must initialize from embedded policy/schema");
+
+        let user = claims_with_role(Some("user"));
+        let identity = crate::entity_config::slug_to_cedar_type("agent-identity");
+
+        // The regression: agent creation via TOCPI must work again
+        assert_eq!(
+            check_permission(&authorizer, &user, "CreateAgentIdentity", &identity, "<_>"),
+            Ok(())
+        );
+        assert_eq!(
+            check_permission(
+                &authorizer,
+                &user,
+                "EditAgentIdentity",
+                &identity,
+                "some-agent-id"
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            check_permission(
+                &authorizer,
+                &user,
+                "ViewAgentIdentity",
+                &identity,
+                "some-agent-id"
+            ),
+            Ok(())
+        );
+
+        // Memory inspection allowed (debugging), memory writes denied
+        let memory = crate::entity_config::slug_to_cedar_type("semantic-memory");
+        assert_eq!(
+            check_permission(
+                &authorizer,
+                &user,
+                "ViewSemanticMemory",
+                &memory,
+                "some-memory-id"
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            check_permission(&authorizer, &user, "CreateSemanticMemory", &memory, "<_>"),
+            Err(StatusCode::FORBIDDEN)
+        );
+
+        // Deletes stay admin-only for everyone
+        assert_eq!(
+            check_permission(
+                &authorizer,
+                &user,
+                "DeleteAgentIdentity",
+                &identity,
+                "some-agent-id"
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
 }

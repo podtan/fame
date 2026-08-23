@@ -78,6 +78,28 @@ permit (
 )
 when { principal has role && principal.role == "developer" };
 
+// User role — human workspace owners acting via TOCPI (agent create/edit
+// forwards their token here). They manage agent identity charters; they do
+// NOT write agent memories (memory writes are agent-attributed — humans
+// get read access for debugging/inspection only).
+//
+// NOTE (0.1.3): identity CRUD is workspace-unscoped, pending workspace-aware
+// resources (0.2.0 scopes identity writes to members of the owning
+// workspace's admin group). View permits are intentionally global.
+permit (
+    principal,
+    action in [
+        Action::"CreateAgentIdentity",
+        Action::"ViewAgentIdentity",
+        Action::"EditAgentIdentity",
+        Action::"ViewSemanticMemory",
+        Action::"ViewEpisodicMemory",
+        Action::"ViewProceduralMemory",
+    ],
+    resource
+)
+when { principal has role && principal.role == "user" };
+
 // Conductor role (L3) — can create, view, and edit identity for any agent.
 // This is the "upper layer agent" that births and evolves other agents.
 permit (
