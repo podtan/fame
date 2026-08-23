@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::info;
 
-use crate::auth::{AuthenticatedUser, ForwardedToken, InstanceContext};
+use crate::auth::{AuthenticatedUser, ForwardedToken, InstanceContext, WorkspaceAdmins};
 use crate::entity_config::{slug_to_cedar_type, EntityConfig};
 use crate::pdt::{CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset, PdtSearchResult};
 use crate::AppState;
@@ -394,6 +394,7 @@ async fn create_entity_inner(
     instance_id: Option<&str>,
     slug: &str,
     body: Value,
+    workspace_admins: WorkspaceAdmins,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let pdt = state.pdt.for_instance(instance_id);
     let config = get_entity_config(state, &slug).ok_or_else(|| {
@@ -407,15 +408,37 @@ async fn create_entity_inner(
     // NOTE: resource type must be the slug-derived Cedar identifier ("SemanticMemory"),
     // not config.name ("Semantic Memory") — spaces are illegal in Cedar type names
     // and would fail UID construction with a 500.
+    //
+    // Workspace scoping (0.2.0): when TOCPI creates an agent identity it
+    // declares the workspace's admin group via X-Workspace-Admins; the scoped
+    // check requires the caller's groups claim to contain it. Without the
+    // header, only admin/conductor's unscoped permits can match. The value is
+    // persisted into the asset metadata for later (trusted) edit-time checks.
+    let mut workspace_admin_group: Option<String> = None;
     if let Some(ref authorizer) = state.authorizer {
         if let Some(ref action) = config.cedar.action_create {
             let claims = user.to_cedar_claims();
-            crate::cedar::enforcement::check_permission(
+            let resource_attrs: Vec<(String, String)> = if slug == "agent-identity" {
+                workspace_admin_group = workspace_admins.0.clone();
+                workspace_admin_group
+                    .clone()
+                    .map(|g| {
+                        vec![(
+                            crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY.to_string(),
+                            g,
+                        )]
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            crate::cedar::enforcement::check_permission_scoped(
                 authorizer,
                 &claims,
                 action,
                 &slug_to_cedar_type(&config.slug),
                 "<_>",
+                &resource_attrs,
             )
             .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
         }
@@ -512,6 +535,15 @@ async fn create_entity_inner(
                 }
             }
         }
+    }
+
+    // Persist the workspace admin group on agent identities — the trusted
+    // anchor for edit-time workspace scoping (header is create-time only).
+    if let Some(group) = workspace_admin_group.as_ref() {
+        metadata.insert(
+            crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY.to_string(),
+            Value::String(group.clone()),
+        );
     }
 
     // --- Inherit auth_context from relation target (e.g. attached_to) ---
@@ -618,15 +650,44 @@ async fn update_entity_status_inner(
 
     // Cedar authorization check
     // Same slug-derived resource type as create (see note above).
+    //
+    // Workspace scoping (0.2.0): for agent identities the anchor comes from
+    // the STORED asset metadata (admin_group), never from a caller header —
+    // callers cannot edit identities they don't administer by declaring a
+    // group of their own.
     if let Some(ref authorizer) = state.authorizer {
         if let Some(ref action) = config.cedar.action_edit {
             let claims = user.to_cedar_claims();
-            crate::cedar::enforcement::check_permission(
+            let resource_attrs: Vec<(String, String)> = if slug == "agent-identity" {
+                pdt.get_asset(id, token)
+                    .await
+                    .ok()
+                    .and_then(|asset| {
+                        asset
+                            .metadata
+                            .get(crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY)
+                            .and_then(|v| v.as_str())
+                            .map(|g| {
+                                vec![
+                                    (
+                                        crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY
+                                            .to_string(),
+                                        g.to_string(),
+                                    ),
+                                ]
+                            })
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            crate::cedar::enforcement::check_permission_scoped(
                 authorizer,
                 &claims,
                 action,
                 &slug_to_cedar_type(&config.slug),
                 id,
+                &resource_attrs,
             )
             .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
         }
@@ -722,10 +783,11 @@ pub fn register_entity_routes(
                         user: AuthenticatedUser,
                         ForwardedToken(token): ForwardedToken,
     instance: InstanceContext,
+                        workspace_admins: WorkspaceAdmins,
                         Json(body): Json<Value>| {
                 let slug = slug.clone();
                 async move {
-                    create_entity_inner(&state, &user, token.as_deref(), instance.as_deref(), &slug, body).await
+                    create_entity_inner(&state, &user, token.as_deref(), instance.as_deref(), &slug, body, workspace_admins).await
                 }
             }),
         );

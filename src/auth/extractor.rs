@@ -47,6 +47,32 @@ where
     }
 }
 
+/// Workspace admin-group context from the X-Workspace-Admins header.
+///
+/// Set by TOCPI when creating an agent identity on behalf of a workspace
+/// owner: it carries the workspace's Kanidm admin group (ws-<uuid>-admins).
+/// Fame persists it into the identity asset's metadata (`admin_group`) so
+/// later edits can re-evaluate workspace scoping from trusted state —
+/// the header itself is only honored at create time.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceAdmins(pub Option<String>);
+
+impl<S: Send + Sync> FromRequestParts<S> for WorkspaceAdmins
+where
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let group = parts
+            .headers
+            .get("X-Workspace-Admins")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+        Ok(WorkspaceAdmins(group))
+    }
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for ForwardedToken
 where
     S: Send + Sync,

@@ -40,6 +40,7 @@ entity ProceduralMemory = {
 entity AgentIdentity = {
     title?: String,
     agent_id?: String,
+    admin_group?: String,
 };
 
 action "CreateSemanticMemory" appliesTo { principal: User, resource: SemanticMemory };

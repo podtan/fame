@@ -8,3 +8,4 @@ pub use error::AuthError;
 pub use extractor::AuthenticatedUser;
 pub use extractor::ForwardedToken;
 pub use extractor::InstanceContext;
+pub use extractor::WorkspaceAdmins;

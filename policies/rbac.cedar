@@ -83,15 +83,16 @@ when { principal has role && principal.role == "developer" };
 // NOT write agent memories (memory writes are agent-attributed — humans
 // get read access for debugging/inspection only).
 //
-// NOTE (0.1.3): identity CRUD is workspace-unscoped, pending workspace-aware
-// resources (0.2.0 scopes identity writes to members of the owning
-// workspace's admin group). View permits are intentionally global.
+// 0.2.0: identity Create/Edit are workspace-scoped — the AgentIdentity
+// resource carries an `admin_group` attribute (the workspace's Kanidm
+// admin group, set by TOCPI at create and persisted in the asset metadata
+// for later edits). A user may only manage the charter if their `groups`
+// claim contains that group. View stays global (inspection); deletes stay
+// admin-only.
 permit (
     principal,
     action in [
-        Action::"CreateAgentIdentity",
         Action::"ViewAgentIdentity",
-        Action::"EditAgentIdentity",
         Action::"ViewSemanticMemory",
         Action::"ViewEpisodicMemory",
         Action::"ViewProceduralMemory",
@@ -99,6 +100,22 @@ permit (
     resource
 )
 when { principal has role && principal.role == "user" };
+
+permit (
+    principal,
+    action in [
+        Action::"CreateAgentIdentity",
+        Action::"EditAgentIdentity",
+    ],
+    resource
+)
+when {
+    principal has role
+    && principal.role == "user"
+    && principal has groups
+    && resource has admin_group
+    && principal.groups.contains(resource.admin_group)
+};
 
 // Conductor role (L3) — can create, view, and edit identity for any agent.
 // This is the "upper layer agent" that births and evolves other agents.
