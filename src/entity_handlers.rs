@@ -20,7 +20,7 @@ use tracing::info;
 
 use crate::auth::{AuthenticatedUser, ForwardedToken, InstanceContext, WorkspaceAdmins};
 use crate::entity_config::{slug_to_cedar_type, EntityConfig};
-use crate::pdt::{CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset, PdtSearchResult};
+use crate::pdt::{AuthContext, CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset, PdtSearchResult};
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -387,6 +387,45 @@ async fn get_entity_inner(
 }
 
 /// POST /api/v1/{slug} — create a new entity
+/// Extract the groups claim (string array) from the authenticated user's
+/// enriched claims.
+fn user_groups(user: &AuthenticatedUser) -> Vec<String> {
+    user.claims_extra
+        .as_ref()
+        .and_then(|c| c.get("groups"))
+        .and_then(|g| g.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pick the group that should OWN a memory created by `groups`:
+/// the creator agent's per-agent memory group (`mem-*`) wins; otherwise the
+/// workspace admin group (`ws-*-admins`, SPN `@domain` suffix tolerated).
+/// None → caller stamps empty auth_context and logs loudly (admin-curable),
+/// never rejects the write.
+fn pick_owner_group(groups: &[String]) -> Option<String> {
+    fn bare(g: &str) -> &str {
+        g.split('@').next().unwrap_or(g)
+    }
+    groups
+        .iter()
+        .find(|g| bare(g).starts_with("mem-"))
+        .cloned()
+        .or_else(|| {
+            groups
+                .iter()
+                .find(|g| {
+                    let b = bare(g);
+                    b.starts_with("ws-") && b.ends_with("-admins")
+                })
+                .cloned()
+        })
+}
+
 async fn create_entity_inner(
     state: &AppState,
     user: &AuthenticatedUser,
@@ -557,13 +596,35 @@ async fn create_entity_inner(
         }
     }
 
+    // --- auth_context stamp (fallback when nothing is inherited) ---
+    // Every memory must be born readable by its owner group: agent creators
+    // stamp their per-agent `mem-<prefix>` group, human creators stamp their
+    // workspace admin group. Empty auth_context = admin-only-invisible —
+    // exactly the bug that made fresh agents blind to their own writes
+    // (every memory needed a hand-patch until 2026-08-29). Groups are
+    // stamped in the exact claim form so PDT's owner_groups matching sees
+    // identical strings on both sides.
+    let auth_context = parent_auth_ctx.or_else(|| {
+        pick_owner_group(&user_groups(user)).map(|group| AuthContext {
+            visibility: "team".to_string(),
+            owner_groups: vec![group],
+            confidentiality: String::new(),
+        })
+    });
+    if auth_context.is_none() {
+        tracing::warn!(
+            "memory created with EMPTY auth_context: creator '{}' has no mem-* or ws-*-admins group — admin re-stamp required",
+            user.user_id
+        );
+    }
+
     // --- Create the PDT asset ---
     let asset = pdt.create_asset(
             CreateAssetRequest {
                 title,
                 content,
                 tags: Some(tags),
-                auth_context: parent_auth_ctx,
+                auth_context,
             },
             token,
         )
@@ -630,6 +691,58 @@ async fn create_entity_inner(
     Ok((StatusCode::CREATED, Json(entity)))
 }
 
+#[cfg(test)]
+mod auth_context_stamp_tests {
+    use super::pick_owner_group;
+
+    #[test]
+    fn agent_mem_group_wins() {
+        let groups = vec![
+            "pdt-api-agents".to_string(),
+            "mem-e69605b1@idp.tanbal.ir".to_string(),
+        ];
+        assert_eq!(
+            pick_owner_group(&groups).as_deref(),
+            Some("mem-e69605b1@idp.tanbal.ir")
+        );
+    }
+
+    #[test]
+    fn human_ws_admins_group_when_no_mem_group() {
+        let groups = vec![
+            "pdt-api-users@idp.tanbal.ir".to_string(),
+            "ws-9f2e7d01-4c5b-6a7d-8e9f-001122334455-admins".to_string(),
+        ];
+        assert_eq!(
+            pick_owner_group(&groups).as_deref(),
+            Some("ws-9f2e7d01-4c5b-6a7d-8e9f-001122334455-admins")
+        );
+    }
+
+    #[test]
+    fn spn_form_ws_admins_still_matches() {
+        let groups = vec!["ws-abc123-admins@idp.tanbal.ir".to_string()];
+        assert_eq!(
+            pick_owner_group(&groups).as_deref(),
+            Some("ws-abc123-admins@idp.tanbal.ir")
+        );
+    }
+
+    #[test]
+    fn plain_roles_never_own_memories() {
+        let groups = vec![
+            "pdt-api-users@idp.tanbal.ir".to_string(),
+            "pdt-api-agents".to_string(),
+        ];
+        assert_eq!(pick_owner_group(&groups), None);
+    }
+
+    #[test]
+    fn mem_group_preferred_over_ws_admins() {
+        let groups = vec!["ws-abc-admins".to_string(), "mem-ff766ee2".to_string()];
+        assert_eq!(pick_owner_group(&groups).as_deref(), Some("mem-ff766ee2"));
+    }
+}
 /// PATCH /api/v1/{slug}/{id}/status — update entity status
 async fn update_entity_status_inner(
     state: &AppState,
