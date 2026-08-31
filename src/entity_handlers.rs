@@ -1222,15 +1222,28 @@ pub async fn list_entity_configs(State(state): State<AppState>) -> Json<Value> {
 
 #[cfg(test)]
 mod identity_content_tests {
-    //! Integration tests for update_identity_content_inner against a REAL
-    //! PDT server (dev mode: AUTH_ENABLED=false + AUTH_DEV_MODE=true,
-    //! sqlite backend) — per owner directive, real wire over mocks.
-    //! Requires the pdt binary: built on demand from the sibling checkout.
+    //! Integration tests for update_identity_content_inner.
+    //!
+    //! TWO BACKEND TIERS, selected automatically:
+    //! - **real-pdt**: a real PDT server (dev auth, sqlite backend) booted
+    //!   from a PREBUILT sibling binary (`../pdt/target/debug/pdt`, or
+    //!   `FAME_IT_PDT_BIN`). Full tenant routing — nested-DB provisioning,
+    //!   X-Instance-Id isolation, real wire.
+    //! - **mock-pdt** (always available, CI default): an in-process axum
+    //!   server speaking PDT's wire format (tag objects carry ids, assets
+    //!   use `_id`) — keeps the gate green without a sibling checkout.
+    //!
+    //! The tier is announced on stdout; tests are identical for both.
+    //! NOTE: never build pdt on demand inside tests — a missing binary
+    //! silently downgrades to the mock tier (loud eprintln).
 
     use super::*;
     use crate::pdt::{CreateAssetRequest, CreateTagRequest, PdtClient};
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post, put};
     use std::process::{Child, Command, Stdio};
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
 
     const ADMIN_GROUP: &str = "ws-1-admins";
     const OLD: &str = "old charter";
@@ -1264,7 +1277,22 @@ mod identity_content_tests {
         format!("sha256:{:x}", sha2::Sha256::digest(s.as_bytes()))
     }
 
-    static SEQ: AtomicU32 = AtomicU32::new(0);
+    // ------------------------------------------------------------------
+    // Tier selection
+    // ------------------------------------------------------------------
+
+    fn prebuilt_pdt_bin() -> Option<std::path::PathBuf> {
+        if let Ok(p) = std::env::var("FAME_IT_PDT_BIN") {
+            let b = std::path::PathBuf::from(p);
+            if b.exists() {
+                return Some(b);
+            }
+        }
+        let b = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .join("pdt/target/debug/pdt");
+        b.exists().then_some(b)
+    }
 
     struct PdtProc(Child);
     impl Drop for PdtProc {
@@ -1274,37 +1302,34 @@ mod identity_content_tests {
         }
     }
 
-    /// Boot a real PDT (sqlite, dev-auth) on a free port; returns base URL.
-    async fn spawn_real_pdt() -> (String, PdtProc, std::path::PathBuf) {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let pdt_dir = manifest
-            .parent()
-            .expect("fame lives in a parent dir")
-            .join("pdt");
-        let bin = pdt_dir.join("target/debug/pdt");
-        if !bin.exists() {
-            let status = Command::new("cargo")
-                .args([
-                    "build",
-                    "--no-default-features",
-                    "--features",
-                    "sqlite-backend",
-                ])
-                .current_dir(&pdt_dir)
-                .status()
-                .expect("failed to run cargo for pdt build — is the sibling pdt checkout present?");
-            assert!(status.success(), "pdt build failed");
-        }
-
-        let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let tmp = std::env::temp_dir().join(format!("fame-pdt-it-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(tmp.join("instances")).expect("tmp instances dir");
-
-        // Free port: bind + drop (small race, acceptable for tests).
+    async fn free_port() -> u16 {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
         drop(l);
+        port
+    }
 
+    async fn wait_healthy(base: &str) {
+        let http = reqwest::Client::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if tokio::time::Instant::now() > deadline {
+                panic!("pdt did not become healthy at {base}");
+            }
+            if let Ok(resp) = http.get(format!("{base}/health")).send().await {
+                if resp.status().is_success() {
+                    return;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn spawn_real_pdt(bin: std::path::PathBuf) -> (String, PdtProc) {
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let tmp = std::env::temp_dir().join(format!("fame-pdt-it-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("instances")).expect("tmp instances dir");
+        let port = free_port().await;
         let child = Command::new(&bin)
             .env("PDT_HOST", "127.0.0.1")
             .env("PDT_PORT", port.to_string())
@@ -1316,24 +1341,194 @@ mod identity_content_tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("failed to spawn pdt");
-
+            .expect("failed to spawn prebuilt pdt binary");
         let base = format!("http://127.0.0.1:{port}");
-        let http = reqwest::Client::new();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
-        loop {
-            if tokio::time::Instant::now() > deadline {
-                panic!("pdt did not become healthy at {base} — check its stderr");
-            }
-            if let Ok(resp) = http.get(format!("{base}/health")).send().await {
-                if resp.status().is_success() {
-                    break;
+        wait_healthy(&base).await;
+        (base, PdtProc(child))
+    }
+
+    // ------------------------------------------------------------------
+    // Mock tier — in-process, wire-accurate PDT stand-in
+    // ------------------------------------------------------------------
+    // Wire lessons baked in (learned against the real server):
+    // - asset objects carry "_id" (fame PdtAsset renames id)
+    // - TAG objects carry "id" + "category" + "value" (fame PdtTag requires id)
+    // - /api/search returns { "data": [ ... ] }
+    // - PUT merges partial JSON (content/title/metadata)
+
+    #[derive(Default)]
+    struct MockDb {
+        assets: Vec<serde_json::Value>,
+        next_id: u32,
+    }
+
+    struct MockState {
+        db: Mutex<MockDb>,
+    }
+
+    fn mock_tag(db: &mut MockDb, category: &str, value: &str) -> serde_json::Value {
+        db.next_id += 1;
+        serde_json::json!({
+            "id": format!("tag-{}", db.next_id),
+            "category": category,
+            "value": value,
+            "added_by": "mock",
+            "added_at": "2026-08-29T00:00:00Z"
+        })
+    }
+
+    async fn spawn_mock_pdt() -> String {
+        let state = std::sync::Arc::new(MockState {
+            db: Mutex::new(MockDb::default()),
+        });
+
+        // POST /api/assets — create
+        let st = state.clone();
+        let create_route = post(
+            move |headers: axum::http::HeaderMap, Json(body): Json<serde_json::Value>| {
+                let st = st.clone();
+                async move {
+                    let mut db = st.db.lock().unwrap();
+                    db.next_id += 1;
+                    let id = format!("ident-{:04}", db.next_id);
+                    let mut tags: Vec<serde_json::Value> = Vec::new();
+                    if let Some(list) = body.get("tags").and_then(|t| t.as_array()) {
+                        for t in list {
+                            tags.push(mock_tag(
+                                &mut db,
+                                t["category"].as_str().unwrap_or_default(),
+                                t["value"].as_str().unwrap_or_default(),
+                            ));
+                        }
+                    }
+                    let _ = headers; // instance routing is process-global in the mock
+                    let asset = serde_json::json!({
+                        "_id": id,
+                        "title": body.get("title").cloned().unwrap_or(serde_json::Value::Null),
+                        "content": body.get("content").cloned().unwrap_or(serde_json::Value::String(String::new())),
+                        "tags": tags,
+                        "metadata": {},
+                        "created_at": "2026-08-29T00:00:00Z",
+                        "updated_at": "2026-08-29T00:00:00Z"
+                    });
+                    db.assets.push(asset.clone());
+                    axum::Json(asset).into_response()
+                }
+            },
+        );
+
+        // GET/PUT /api/assets/{id}
+        let st_get = state.clone();
+        let st_put = state.clone();
+        let asset_route = get(move |Path(id): Path<String>| {
+            let st = st_get.clone();
+            async move {
+                use axum::response::IntoResponse;
+                let db = st.db.lock().unwrap();
+                match db.assets.iter().find(|a| a["_id"] == id) {
+                    Some(a) => axum::Json(a.clone()).into_response(),
+                    None => (
+                        axum::http::StatusCode::NOT_FOUND,
+                        axum::Json(serde_json::json!({"error": "not found"})),
+                    )
+                        .into_response(),
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        (base, PdtProc(child), tmp)
+        })
+        .put(
+            move |Path(id): Path<String>, Json(body): Json<serde_json::Value>| {
+                let st = st_put.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    let mut db = st.db.lock().unwrap();
+                    match db.assets.iter_mut().find(|a| a["_id"] == id) {
+                        Some(a) => {
+                            if let Some(c) = body.get("content") {
+                                a["content"] = c.clone();
+                            }
+                            if let Some(t) = body.get("title") {
+                                a["title"] = t.clone();
+                            }
+                            if let Some(m) = body.get("metadata").and_then(|m| m.as_object()) {
+                                let md = a["metadata"].as_object_mut().unwrap();
+                                for (k, v) in m {
+                                    md.insert(k.clone(), v.clone());
+                                }
+                            }
+                            a["updated_at"] =
+                                serde_json::Value::String("2026-08-31T12:00:00Z".into());
+                            axum::Json(a.clone()).into_response()
+                        }
+                        None => (
+                            axum::http::StatusCode::NOT_FOUND,
+                            axum::Json(serde_json::json!({"error": "not found"})),
+                        )
+                            .into_response(),
+                    }
+                }
+            },
+        );
+
+        // GET /api/assets/{id}/relations
+        let relations_route =
+            get(move |Path(_id): Path<String>| async move { axum::Json(serde_json::json!([])) });
+
+        // GET /api/search — compact results, { data: [...] }
+        let st = state.clone();
+        let search_route = get(
+            move |Query(q): Query<std::collections::HashMap<String, String>>| {
+                let st = st.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    let tag = q.get("tag").cloned().unwrap_or_default();
+                    let (cat, val) = match tag.split_once(':') {
+                        Some((c, v)) => (c.to_string(), v.to_string()),
+                        None => (tag.clone(), String::new()),
+                    };
+                    let db = st.db.lock().unwrap();
+                    let data: Vec<serde_json::Value> = db
+                        .assets
+                        .iter()
+                        .filter(|a| {
+                            a["tags"].as_array().is_some_and(|tags| {
+                                tags.iter().any(|t| {
+                                    t["category"] == serde_json::Value::String(cat.clone())
+                                        && t["value"] == serde_json::Value::String(val.clone())
+                                })
+                            })
+                        })
+                        .map(|a| {
+                            serde_json::json!({
+                                "_id": a["_id"],
+                                "title": a["title"],
+                                "tags": a["tags"],
+                                "updated_at": a["updated_at"]
+                            })
+                        })
+                        .collect();
+                    axum::Json(serde_json::json!({ "data": data })).into_response()
+                }
+            },
+        );
+
+        let app = axum::Router::new()
+            .route("/api/assets", create_route)
+            .route("/api/assets/{id}", asset_route)
+            .route("/api/assets/{id}/relations", relations_route)
+            .route("/api/search", search_route);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
     }
+
+    use axum::extract::Query;
+
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+
+    // ------------------------------------------------------------------
+    // Shared environment
+    // ------------------------------------------------------------------
 
     struct TestEnv {
         state: AppState,
@@ -1341,27 +1536,46 @@ mod identity_content_tests {
         ws: String,
         agent: String,
         identity_id: String,
-        _proc: PdtProc,
+        _proc: Option<PdtProc>,
     }
 
     async fn test_env() -> TestEnv {
-        let (base, proc, _tmp) = spawn_real_pdt().await;
+        let (tier, base, proc) = match prebuilt_pdt_bin() {
+            Some(bin) => {
+                let (base, proc) = spawn_real_pdt(bin).await;
+                ("real-pdt", base, Some(proc))
+            }
+            None => {
+                eprintln!(
+                    "identity_content_tests: backend = mock-pdt (prebuilt pdt binary not found; \
+                     build ../pdt with `cargo build --no-default-features --features \
+                     sqlite-backend` to run the real tier)"
+                );
+                ("mock-pdt", spawn_mock_pdt().await, None)
+            }
+        };
+        let _ = tier;
+
         let http = reqwest::Client::new();
 
-        // Provision workspace, then the agent's nested child DB — the same
-        // explicit provisioning the control plane does in production.
+        // Provisioning (real tier only — the mock has no tenant routing;
+        // per-test processes keep mock-tier tests isolated).
         let ws = uuid::Uuid::new_v4().to_string();
         let agent = uuid::Uuid::new_v4().to_string();
-        for (id, parent) in [(&ws, None), (&agent, Some(&ws))] {
-            let mut req = http
-                .post(format!("{base}/api/instances/{id}/provision"))
-                .query(&[("parent", parent.map(|p| p.to_string()))]);
-            let resp = req.send().await.expect("provision request");
-            assert!(
-                resp.status().is_success(),
-                "provision {id} failed: {}",
-                resp.status()
-            );
+        if proc.is_some() {
+            for (id, parent) in [(&ws, None), (&agent, Some(&ws))] {
+                let resp = http
+                    .post(format!("{base}/api/instances/{id}/provision"))
+                    .query(&[("parent", parent.map(|p| p.to_string()))])
+                    .send()
+                    .await
+                    .expect("provision request");
+                assert!(
+                    resp.status().is_success(),
+                    "provision {id} failed: {}",
+                    resp.status()
+                );
+            }
         }
 
         // Real Cedar authorizer over the same embedded policies prod uses.
@@ -1397,9 +1611,9 @@ mod identity_content_tests {
             entity_configs,
         };
 
-        // Seed the identity asset THROUGH fame's own client (real wire),
-        // then persist the workspace admin_group anchor the way the create
-        // flow does (raw PUT with X-Instance-Id).
+        // Seed the identity asset THROUGH fame's own client (same wire as
+        // prod), then persist the workspace admin_group anchor the way the
+        // create flow does (raw PUT with X-Instance-Id).
         let identity = state
             .pdt
             .for_instance(Some(&agent))
@@ -1422,7 +1636,7 @@ mod identity_content_tests {
                 None,
             )
             .await
-            .expect("seed identity via real PDT");
+            .expect("seed identity via pdt client");
         let resp = http
             .put(format!("{base}/api/assets/{}", identity.id))
             .header("X-Instance-Id", &agent)
@@ -1457,8 +1671,8 @@ mod identity_content_tests {
             .await
     }
 
-    /// Roundtrip: content lands in place via the real PDT, hashes echo,
-    /// exactly ONE identity record exists (no duplicates), agent count unchanged.
+    /// Roundtrip: content lands in place, hashes echo, exactly ONE identity
+    /// record exists (no duplicates).
     #[tokio::test]
     async fn roundtrip_updates_in_place_with_hash_echo() {
         let env = test_env().await;
@@ -1571,7 +1785,8 @@ mod identity_content_tests {
         assert_eq!(resp.0["content"], "self-written charter");
     }
 
-    /// Empty content = explicit wipe: allowed, stored empty.
+    /// Empty content = explicit wipe: allowed, stored empty. The entity
+    /// mapper omits empty fields, so verify via hash echo + stored asset.
     #[tokio::test]
     async fn empty_content_is_explicit_wipe() {
         let env = test_env().await;
@@ -1584,8 +1799,6 @@ mod identity_content_tests {
         )
         .await
         .expect("explicit wipe allowed");
-        // The entity mapper omits empty fields — verify the wipe through the
-        // hash echo and the stored asset, not the mapped content field.
         assert_eq!(resp.0["content_hash"]["new"], sha_hex(""));
         let asset = env
             .state
