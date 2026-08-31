@@ -17,13 +17,11 @@ mod openapi_gen;
 mod pdt;
 
 use axum::{routing::get, Router};
+use pep::oidc_resource_server::ResourceServerClient;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
-use tracing_subscriber::{
-    layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa_swagger_ui::SwaggerUi;
-use pep::oidc_resource_server::ResourceServerClient;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -47,8 +45,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Loaded config for Fame");
 
     // Load entity configs from the entities directory
-    let entity_config_dir = std::env::var("FAME_ENTITY_DIR")
-        .unwrap_or_else(|_| config.entity_dir.clone());
+    let entity_config_dir =
+        std::env::var("FAME_ENTITY_DIR").unwrap_or_else(|_| config.entity_dir.clone());
     let entity_configs_raw = entity_config::load_entity_configs(&entity_config_dir);
     let entity_configs: Vec<Arc<entity_config::EntityConfig>> =
         entity_configs_raw.into_iter().map(Arc::new).collect();
@@ -134,9 +132,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
-        .merge(
-            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", merged_openapi),
-        )
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", merged_openapi))
         .with_state(state)
         .layer(CorsLayer::permissive());
 

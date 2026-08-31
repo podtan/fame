@@ -111,10 +111,7 @@ impl AuthenticatedUser {
                 if let Some(role) = orig.get("role") {
                     extra.insert("role".to_string(), role.clone());
                 } else {
-                    extra.insert(
-                        "role".to_string(),
-                        Value::String("viewer".to_string()),
-                    );
+                    extra.insert("role".to_string(), Value::String("viewer".to_string()));
                 }
                 // Propagate groups if present
                 if let Some(groups) = orig.get("groups") {
@@ -129,10 +126,7 @@ impl AuthenticatedUser {
             }
             None => {
                 // No original claims — assume least privilege
-                extra.insert(
-                    "role".to_string(),
-                    Value::String("viewer".to_string()),
-                );
+                extra.insert("role".to_string(), Value::String("viewer".to_string()));
             }
         }
 

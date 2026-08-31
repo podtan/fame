@@ -145,12 +145,23 @@ impl PdtClient {
     }
 
     /// Build a request builder with the user's Bearer token and optional instance routing.
-    fn req(&self, method: reqwest::Method, url: String, token: Option<&str>) -> reqwest::RequestBuilder {
+    fn req(
+        &self,
+        method: reqwest::Method,
+        url: String,
+        token: Option<&str>,
+    ) -> reqwest::RequestBuilder {
         self.req_with_instance(method, url, token, None)
     }
 
     /// Build a request builder with token and instance ID for multi-tenant routing.
-    fn req_with_instance(&self, method: reqwest::Method, url: String, token: Option<&str>, instance_id: Option<&str>) -> reqwest::RequestBuilder {
+    fn req_with_instance(
+        &self,
+        method: reqwest::Method,
+        url: String,
+        token: Option<&str>,
+        instance_id: Option<&str>,
+    ) -> reqwest::RequestBuilder {
         let b = self.client.request(method, url);
         let b = if let Some(t) = token {
             b.bearer_auth(t)
@@ -176,14 +187,32 @@ impl PdtClient {
 
     /// Search by tag — returns compact results (id, title, snippet, tags, updated_at).
     /// Use for list views where full content is not needed.
-    pub async fn search_by_tag(&self, category: &str, value: &str, token: Option<&str>) -> Result<Vec<PdtSearchResult>> {
-        self.search_by_tag_instance(category, value, token, None).await
+    pub async fn search_by_tag(
+        &self,
+        category: &str,
+        value: &str,
+        token: Option<&str>,
+    ) -> Result<Vec<PdtSearchResult>> {
+        self.search_by_tag_instance(category, value, token, None)
+            .await
     }
 
     /// Search by tag with instance routing.
-    pub async fn search_by_tag_instance(&self, category: &str, value: &str, token: Option<&str>, instance_id: Option<&str>) -> Result<Vec<PdtSearchResult>> {
-        let url = format!("{}/api/search?tag={}:{}&limit=100", self.base_url, category, value);
-        let resp = self.req_with_instance(reqwest::Method::GET, url, token, instance_id).send().await?;
+    pub async fn search_by_tag_instance(
+        &self,
+        category: &str,
+        value: &str,
+        token: Option<&str>,
+        instance_id: Option<&str>,
+    ) -> Result<Vec<PdtSearchResult>> {
+        let url = format!(
+            "{}/api/search?tag={}:{}&limit=100",
+            self.base_url, category, value
+        );
+        let resp = self
+            .req_with_instance(reqwest::Method::GET, url, token, instance_id)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -195,16 +224,25 @@ impl PdtClient {
 
     /// Full-text search for skill assets — wraps PDT's /api/search with type:skill tag filter.
     /// Returns compact results suitable for skill discovery and trigger matching.
-    pub async fn search_skills(&self, query: &str, limit: i64, token: Option<&str>) -> Result<Vec<PdtSearchResult>> {
+    pub async fn search_skills(
+        &self,
+        query: &str,
+        limit: i64,
+        token: Option<&str>,
+    ) -> Result<Vec<PdtSearchResult>> {
         let encoded_query: String = query
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c.to_string() } else { format!("%{:02X}", c as u8) })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c.to_string()
+                } else {
+                    format!("%{:02X}", c as u8)
+                }
+            })
             .collect();
         let url = format!(
             "{}/api/search?q={}&tag=type:skill&limit={}",
-            self.base_url,
-            encoded_query,
-            limit
+            self.base_url, encoded_query, limit
         );
         let resp = self.req(reqwest::Method::GET, url, token).send().await?;
         let result = resp.json::<CompactSearchResponse>().await?;
@@ -216,9 +254,17 @@ impl PdtClient {
     }
 
     /// Get asset with instance routing.
-    pub async fn get_asset_instance(&self, id: &str, token: Option<&str>, instance_id: Option<&str>) -> Result<PdtAsset> {
+    pub async fn get_asset_instance(
+        &self,
+        id: &str,
+        token: Option<&str>,
+        instance_id: Option<&str>,
+    ) -> Result<PdtAsset> {
         let url = format!("{}/api/assets/{}", self.base_url, id);
-        let resp = self.req_with_instance(reqwest::Method::GET, url, token, instance_id).send().await?;
+        let resp = self
+            .req_with_instance(reqwest::Method::GET, url, token, instance_id)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -227,34 +273,69 @@ impl PdtClient {
         Ok(resp.json::<PdtAsset>().await?)
     }
 
-    pub async fn create_asset(&self, req: CreateAssetRequest, token: Option<&str>) -> Result<PdtAsset> {
+    pub async fn create_asset(
+        &self,
+        req: CreateAssetRequest,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
         self.create_asset_instance(req, token, None).await
     }
 
     /// Create asset with instance routing.
-    pub async fn create_asset_instance(&self, req: CreateAssetRequest, token: Option<&str>, instance_id: Option<&str>) -> Result<PdtAsset> {
+    pub async fn create_asset_instance(
+        &self,
+        req: CreateAssetRequest,
+        token: Option<&str>,
+        instance_id: Option<&str>,
+    ) -> Result<PdtAsset> {
         let url = format!("{}/api/assets", self.base_url);
-        let resp = self.req_with_instance(reqwest::Method::POST, url, token, instance_id).json(&req).send().await?;
+        let resp = self
+            .req_with_instance(reqwest::Method::POST, url, token, instance_id)
+            .json(&req)
+            .send()
+            .await?;
         parse_pdt_response(resp).await
     }
 
-    pub async fn update_asset_content(&self, id: &str, content: &str, token: Option<&str>) -> Result<PdtAsset> {
+    pub async fn update_asset_content(
+        &self,
+        id: &str,
+        content: &str,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
         let url = format!("{}/api/assets/{}", self.base_url, id);
-        let resp = self.req(reqwest::Method::PUT, url, token).json(&serde_json::json!({ "content": content })).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, url, token)
+            .json(&serde_json::json!({ "content": content }))
+            .send()
+            .await?;
         parse_pdt_response(resp).await
     }
 
     /// Create a relation between two assets
-    pub async fn create_relation(&self, req: CreateRelationRequest, token: Option<&str>) -> Result<PdtRelation> {
+    pub async fn create_relation(
+        &self,
+        req: CreateRelationRequest,
+        token: Option<&str>,
+    ) -> Result<PdtRelation> {
         let url = format!("{}/api/relations", self.base_url);
-        let resp = self.req(reqwest::Method::POST, url, token).json(&req).send().await?;
+        let resp = self
+            .req(reqwest::Method::POST, url, token)
+            .json(&req)
+            .send()
+            .await?;
         Ok(resp.json::<PdtRelation>().await?)
     }
 
     /// Get all relations for an asset.
     /// Note: PDT returns ALL relations regardless of direction param, so callers
     /// must filter client-side by checking from_asset_id / to_asset_id.
-    pub async fn get_relations(&self, asset_id: &str, _direction: Option<&str>, token: Option<&str>) -> Result<Vec<PdtRelation>> {
+    pub async fn get_relations(
+        &self,
+        asset_id: &str,
+        _direction: Option<&str>,
+        token: Option<&str>,
+    ) -> Result<Vec<PdtRelation>> {
         let url = format!("{}/api/assets/{}/relations", self.base_url, asset_id);
         let resp = self.req(reqwest::Method::GET, url, token).send().await?;
         Ok(resp.json().await?)
@@ -268,35 +349,59 @@ impl PdtClient {
     }
 
     /// Update asset title
-    pub async fn update_asset_title(&self, id: &str, title: &str, token: Option<&str>) -> Result<PdtAsset> {
+    pub async fn update_asset_title(
+        &self,
+        id: &str,
+        title: &str,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
         let url = format!("{}/api/assets/{}", self.base_url, id);
-        let resp = self.req(reqwest::Method::PUT, url, token).json(&serde_json::json!({ "title": title })).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, url, token)
+            .json(&serde_json::json!({ "title": title }))
+            .send()
+            .await?;
         parse_pdt_response(resp).await
     }
 
-    pub async fn update_asset_tag(&self, id: &str, category: &str, value: &str, token: Option<&str>) -> Result<PdtAsset> {
+    pub async fn update_asset_tag(
+        &self,
+        id: &str,
+        category: &str,
+        value: &str,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
         let asset = self.get_asset(id, token).await?;
-        
-        let existing_tag_id = asset.tags.iter()
+
+        let existing_tag_id = asset
+            .tags
+            .iter()
             .find(|t| t.category == category)
             .map(|t| t.id.as_str());
-        
+
         if let Some(tag_id) = existing_tag_id {
             let url = format!("{}/api/assets/{}/tags/{}", self.base_url, id, tag_id);
             self.req(reqwest::Method::DELETE, url, token).send().await?;
         }
-        
+
         let url = format!("{}/api/assets/{}/tags", self.base_url, id);
-        self.req(reqwest::Method::POST, url, token).json(&CreateTagRequest {
-            category: category.to_string(),
-            value: value.to_string(),
-        }).send().await?;
-        
+        self.req(reqwest::Method::POST, url, token)
+            .json(&CreateTagRequest {
+                category: category.to_string(),
+                value: value.to_string(),
+            })
+            .send()
+            .await?;
+
         self.get_asset(id, token).await
     }
 
     /// Get the auth_context of an asset (for inheritance at creation).
-    pub async fn get_auth_context(&self, id: &str, token: Option<&str>) -> Result<Option<AuthContext>> {
+    pub async fn get_auth_context(
+        &self,
+        id: &str,
+        token: Option<&str>,
+    ) -> Result<Option<AuthContext>> {
         let asset = self.get_asset(id, token).await?;
         Ok(asset.auth_context)
     }
@@ -314,19 +419,27 @@ impl PdtClient {
         let url = format!("{}/api/assets/{}/auth-context", self.base_url, id);
         let mut body = serde_json::Map::new();
         if let Some(v) = visibility {
-            body.insert("visibility".to_string(), serde_json::Value::String(v.to_string()));
+            body.insert(
+                "visibility".to_string(),
+                serde_json::Value::String(v.to_string()),
+            );
         }
         if let Some(g) = owner_groups {
             body.insert("owner_groups".to_string(), serde_json::to_value(g)?);
         }
         if let Some(c) = confidentiality {
-            body.insert("confidentiality".to_string(), serde_json::Value::String(c.to_string()));
+            body.insert(
+                "confidentiality".to_string(),
+                serde_json::Value::String(c.to_string()),
+            );
         }
         body.insert("cascade".to_string(), serde_json::Value::Bool(cascade));
 
-        let resp = self.req(reqwest::Method::PUT, url, token)
+        let resp = self
+            .req(reqwest::Method::PUT, url, token)
             .json(&serde_json::Value::Object(body))
-            .send().await?;
+            .send()
+            .await?;
         parse_pdt_response(resp).await
     }
 }
@@ -338,30 +451,38 @@ struct PdtResponse<T: Default> {
     data: Option<T>,
 }
 
-async fn parse_pdt_response<T: serde::de::DeserializeOwned + Default>(resp: reqwest::Response) -> Result<T> {
+async fn parse_pdt_response<T: serde::de::DeserializeOwned + Default>(
+    resp: reqwest::Response,
+) -> Result<T> {
     // Try direct deserialization first (PDT may return the object directly)
     let bytes = resp.bytes().await?;
-    
+
     // First try: direct deserialization
     if let Ok(val) = serde_json::from_slice::<T>(&bytes) {
         return Ok(val);
     }
-    
+
     // Second try: wrapped in { "data": ... }
     if let Ok(wrapped) = serde_json::from_slice::<PdtResponse<T>>(&bytes) {
         if let Some(data) = wrapped.data {
             return Ok(data);
         }
     }
-    
+
     // If both fail, try direct one more time with better error
-    serde_json::from_slice::<T>(&bytes)
-        .map_err(|e| anyhow::anyhow!("Failed to parse PDT response: {} | body: {}", e, String::from_utf8_lossy(&bytes)))
+    serde_json::from_slice::<T>(&bytes).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to parse PDT response: {} | body: {}",
+            e,
+            String::from_utf8_lossy(&bytes)
+        )
+    })
 }
 
 impl PdtSearchResult {
     pub fn get_tag(&self, category: &str) -> Option<&str> {
-        self.tags.iter()
+        self.tags
+            .iter()
             .find(|t| t.category == category)
             .map(|t| t.value.as_str())
     }
@@ -369,7 +490,8 @@ impl PdtSearchResult {
 
 impl PdtAsset {
     pub fn get_tag(&self, category: &str) -> Option<&str> {
-        self.tags.iter()
+        self.tags
+            .iter()
             .find(|t| t.category == category)
             .map(|t| t.value.as_str())
     }
@@ -385,71 +507,174 @@ pub struct InstancePdtClient<'a> {
 }
 
 impl<'a> InstancePdtClient<'a> {
-    pub async fn search_by_tag(&self, category: &str, value: &str, token: Option<&str>) -> Result<Vec<PdtSearchResult>> {
-        self.client.search_by_tag_instance(category, value, token, self.instance_id.as_deref()).await
+    pub async fn search_by_tag(
+        &self,
+        category: &str,
+        value: &str,
+        token: Option<&str>,
+    ) -> Result<Vec<PdtSearchResult>> {
+        self.client
+            .search_by_tag_instance(category, value, token, self.instance_id.as_deref())
+            .await
     }
 
-    pub async fn search_skills(&self, query: &str, limit: i64, token: Option<&str>) -> Result<Vec<PdtSearchResult>> {
+    pub async fn search_skills(
+        &self,
+        query: &str,
+        limit: i64,
+        token: Option<&str>,
+    ) -> Result<Vec<PdtSearchResult>> {
         let url = format!(
             "{}/api/search?q={}&tag=type:skill&limit={}",
             self.client.base_url,
             query.replace(' ', "+"),
             limit
         );
-        let resp = self.client.req_with_instance(reqwest::Method::GET, url, token, self.instance_id.as_deref()).send().await?;
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::GET,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
+            .send()
+            .await?;
         let result = resp.json::<CompactSearchResponse>().await?;
         Ok(result.data)
     }
 
     pub async fn get_asset(&self, id: &str, token: Option<&str>) -> Result<PdtAsset> {
-        self.client.get_asset_instance(id, token, self.instance_id.as_deref()).await
+        self.client
+            .get_asset_instance(id, token, self.instance_id.as_deref())
+            .await
     }
 
-    pub async fn create_asset(&self, req: CreateAssetRequest, token: Option<&str>) -> Result<PdtAsset> {
-        self.client.create_asset_instance(req, token, self.instance_id.as_deref()).await
+    pub async fn create_asset(
+        &self,
+        req: CreateAssetRequest,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
+        self.client
+            .create_asset_instance(req, token, self.instance_id.as_deref())
+            .await
     }
 
-    pub async fn update_asset_content(&self, id: &str, content: &str, token: Option<&str>) -> Result<PdtAsset> {
+    pub async fn update_asset_content(
+        &self,
+        id: &str,
+        content: &str,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
         let url = format!("{}/api/assets/{}", self.client.base_url, id);
-        let resp = self.client.req_with_instance(reqwest::Method::PUT, url, token, self.instance_id.as_deref())
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::PUT,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
             .json(&serde_json::json!({ "content": content }))
-            .send().await?;
+            .send()
+            .await?;
         parse_pdt_response(resp).await
     }
 
-    pub async fn update_asset_title(&self, id: &str, title: &str, token: Option<&str>) -> Result<PdtAsset> {
+    pub async fn update_asset_title(
+        &self,
+        id: &str,
+        title: &str,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
         let url = format!("{}/api/assets/{}", self.client.base_url, id);
-        let resp = self.client.req_with_instance(reqwest::Method::PUT, url, token, self.instance_id.as_deref())
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::PUT,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
             .json(&serde_json::json!({ "title": title }))
-            .send().await?;
+            .send()
+            .await?;
         parse_pdt_response(resp).await
     }
 
-    pub async fn update_asset_tag(&self, id: &str, category: &str, value: &str, token: Option<&str>) -> Result<PdtAsset> {
+    pub async fn update_asset_tag(
+        &self,
+        id: &str,
+        category: &str,
+        value: &str,
+        token: Option<&str>,
+    ) -> Result<PdtAsset> {
         let url = format!("{}/api/assets/{}/tags", self.client.base_url, id);
-        self.client.req_with_instance(reqwest::Method::POST, url, token, self.instance_id.as_deref())
+        self.client
+            .req_with_instance(
+                reqwest::Method::POST,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
             .json(&CreateTagRequest {
                 category: category.to_string(),
                 value: value.to_string(),
             })
-            .send().await?;
+            .send()
+            .await?;
         // Return updated asset
         let url2 = format!("{}/api/assets/{}", self.client.base_url, id);
-        let resp = self.client.req_with_instance(reqwest::Method::GET, url2, token, self.instance_id.as_deref()).send().await?;
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::GET,
+                url2,
+                token,
+                self.instance_id.as_deref(),
+            )
+            .send()
+            .await?;
         Ok(resp.json::<PdtAsset>().await?)
     }
 
-    pub async fn create_relation(&self, req: CreateRelationRequest, token: Option<&str>) -> Result<PdtRelation> {
+    pub async fn create_relation(
+        &self,
+        req: CreateRelationRequest,
+        token: Option<&str>,
+    ) -> Result<PdtRelation> {
         let url = format!("{}/api/relations", self.client.base_url);
-        let resp = self.client.req_with_instance(reqwest::Method::POST, url, token, self.instance_id.as_deref())
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::POST,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
             .json(&req)
-            .send().await?;
+            .send()
+            .await?;
         Ok(resp.json::<PdtRelation>().await?)
     }
 
-    pub async fn get_relations(&self, asset_id: &str, _direction: Option<&str>, token: Option<&str>) -> Result<Vec<PdtRelation>> {
+    pub async fn get_relations(
+        &self,
+        asset_id: &str,
+        _direction: Option<&str>,
+        token: Option<&str>,
+    ) -> Result<Vec<PdtRelation>> {
         let url = format!("{}/api/assets/{}/relations", self.client.base_url, asset_id);
-        let resp = self.client.req_with_instance(reqwest::Method::GET, url, token, self.instance_id.as_deref()).send().await?;
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::GET,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -460,13 +685,34 @@ impl<'a> InstancePdtClient<'a> {
 
     pub async fn delete_relation(&self, relation_id: &str, token: Option<&str>) -> Result<()> {
         let url = format!("{}/api/relations/{}", self.client.base_url, relation_id);
-        self.client.req_with_instance(reqwest::Method::DELETE, url, token, self.instance_id.as_deref()).send().await?;
+        self.client
+            .req_with_instance(
+                reqwest::Method::DELETE,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
+            .send()
+            .await?;
         Ok(())
     }
 
-    pub async fn get_auth_context(&self, id: &str, token: Option<&str>) -> Result<Option<AuthContext>> {
+    pub async fn get_auth_context(
+        &self,
+        id: &str,
+        token: Option<&str>,
+    ) -> Result<Option<AuthContext>> {
         let url = format!("{}/api/assets/{}", self.client.base_url, id);
-        let resp = self.client.req_with_instance(reqwest::Method::GET, url, token, self.instance_id.as_deref()).send().await?;
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::GET,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -488,19 +734,33 @@ impl<'a> InstancePdtClient<'a> {
         let url = format!("{}/api/assets/{}/auth-context", self.client.base_url, id);
         let mut body = serde_json::Map::new();
         if let Some(v) = visibility {
-            body.insert("visibility".to_string(), serde_json::Value::String(v.to_string()));
+            body.insert(
+                "visibility".to_string(),
+                serde_json::Value::String(v.to_string()),
+            );
         }
         if let Some(g) = owner_groups {
             body.insert("owner_groups".to_string(), serde_json::to_value(g)?);
         }
         if let Some(c) = confidentiality {
-            body.insert("confidentiality".to_string(), serde_json::Value::String(c.to_string()));
+            body.insert(
+                "confidentiality".to_string(),
+                serde_json::Value::String(c.to_string()),
+            );
         }
         body.insert("cascade".to_string(), serde_json::Value::Bool(cascade));
 
-        let resp = self.client.req_with_instance(reqwest::Method::PUT, url, token, self.instance_id.as_deref())
+        let resp = self
+            .client
+            .req_with_instance(
+                reqwest::Method::PUT,
+                url,
+                token,
+                self.instance_id.as_deref(),
+            )
             .json(&serde_json::Value::Object(body))
-            .send().await?;
+            .send()
+            .await?;
         parse_pdt_response(resp).await
     }
 

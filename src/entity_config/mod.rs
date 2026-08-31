@@ -17,13 +17,21 @@ pub trait AsTagPair {
 }
 
 impl AsTagPair for PdtTag {
-    fn category(&self) -> &str { &self.category }
-    fn value(&self) -> &str { &self.value }
+    fn category(&self) -> &str {
+        &self.category
+    }
+    fn value(&self) -> &str {
+        &self.value
+    }
 }
 
 impl AsTagPair for PdtTagSummary {
-    fn category(&self) -> &str { &self.category }
-    fn value(&self) -> &str { &self.value }
+    fn category(&self) -> &str {
+        &self.category
+    }
+    fn value(&self) -> &str {
+        &self.value
+    }
 }
 
 /// The top-level entity file: `[entity] ...`
@@ -254,13 +262,11 @@ impl EntityConfig {
     /// Generic over PdtTag / PdtTagSummary — full assets and compact
     /// search results carry the same (category, value) pairs.
     pub fn tags_match<T: AsTagPair>(&self, asset_tags: &[T]) -> bool {
-        self.default_tags
-            .iter()
-            .all(|(category, value)| {
-                asset_tags
-                    .iter()
-                    .any(|t| t.category() == category && t.value() == value)
-            })
+        self.default_tags.iter().all(|(category, value)| {
+            asset_tags
+                .iter()
+                .any(|t| t.category() == category && t.value() == value)
+        })
     }
 
     /// Find all fields that should appear in a given view.
@@ -276,18 +282,12 @@ impl EntityConfig {
         self.default_tags
             .get("status")
             .map(|s| s.as_str())
-            .or_else(|| {
-                self.fields
-                    .get("status")
-                    .and_then(|f| f.default.as_deref())
-            })
+            .or_else(|| self.fields.get("status").and_then(|f| f.default.as_deref()))
     }
 
     /// Get allowed status values if the status field is an enum.
     pub fn status_values(&self) -> Option<&[String]> {
-        self.fields
-            .get("status")
-            .and_then(|f| f.values.as_deref())
+        self.fields.get("status").and_then(|f| f.values.as_deref())
     }
 
     /// Find relation fields (field_type == Relation).
@@ -418,11 +418,17 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
         };
 
         // An episodic memory: has both discriminators → matches.
-        let episodic_summary = vec![summary("type", "agent-memory"), summary("memory-type", "episodic")];
+        let episodic_summary = vec![
+            summary("type", "agent-memory"),
+            summary("memory-type", "episodic"),
+        ];
         assert!(entity.tags_match(&episodic_summary));
 
         // A semantic memory: same type, different memory-type → must NOT match.
-        let semantic_summary = vec![summary("type", "agent-memory"), summary("memory-type", "semantic")];
+        let semantic_summary = vec![
+            summary("type", "agent-memory"),
+            summary("memory-type", "semantic"),
+        ];
         assert!(!entity.tags_match(&semantic_summary));
 
         // Missing the discriminator entirely → must NOT match.
@@ -430,13 +436,23 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
         assert!(!entity.tags_match(&bare_summary));
 
         // Extra tags on the asset are ignored.
-        let noisy_summary = vec![summary("type", "agent-memory"), summary("memory-type", "episodic"), summary("outcome", "success")];
+        let noisy_summary = vec![
+            summary("type", "agent-memory"),
+            summary("memory-type", "episodic"),
+            summary("outcome", "success"),
+        ];
         assert!(entity.tags_match(&noisy_summary));
 
         // Same guarantees for the full-asset shape (PdtTag).
-        let episodic_full = vec![full("type", "agent-memory"), full("memory-type", "episodic")];
+        let episodic_full = vec![
+            full("type", "agent-memory"),
+            full("memory-type", "episodic"),
+        ];
         assert!(entity.tags_match(&episodic_full));
-        let semantic_full = vec![full("type", "agent-memory"), full("memory-type", "semantic")];
+        let semantic_full = vec![
+            full("type", "agent-memory"),
+            full("memory-type", "semantic"),
+        ];
         assert!(!entity.tags_match(&semantic_full));
     }
 
@@ -445,10 +461,16 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
         let file: EntityFile = toml::from_str(SAMPLE_TOML).unwrap();
         let entity = &file.entity;
 
-        assert_eq!(entity.cedar.action_create.as_deref(), Some("CreateDocument"));
+        assert_eq!(
+            entity.cedar.action_create.as_deref(),
+            Some("CreateDocument")
+        );
         assert_eq!(entity.cedar.action_read.as_deref(), Some("ViewDocument"));
         assert_eq!(entity.cedar.action_edit.as_deref(), Some("EditDocument"));
-        assert_eq!(entity.cedar.action_delete.as_deref(), Some("DeleteDocument"));
+        assert_eq!(
+            entity.cedar.action_delete.as_deref(),
+            Some("DeleteDocument")
+        );
     }
 
     #[test]
@@ -472,7 +494,15 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
         assert_eq!(status.field_type, FieldType::Enum);
         assert_eq!(
             status.values.as_deref(),
-            Some(&["draft".to_string(), "review".to_string(), "approved".to_string(), "published".to_string(), "archived".to_string()][..])
+            Some(
+                &[
+                    "draft".to_string(),
+                    "review".to_string(),
+                    "approved".to_string(),
+                    "published".to_string(),
+                    "archived".to_string()
+                ][..]
+            )
         );
         assert_eq!(status.default.as_deref(), Some("draft"));
         assert!(status.badge);
@@ -502,7 +532,14 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
         assert_eq!(detail_view.layout, "detail");
         assert_eq!(
             detail_view.fields,
-            vec!["title", "status", "content", "attached_to", "created_at", "updated_at"]
+            vec![
+                "title",
+                "status",
+                "content",
+                "attached_to",
+                "created_at",
+                "updated_at"
+            ]
         );
     }
 

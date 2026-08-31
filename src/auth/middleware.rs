@@ -117,7 +117,11 @@ where
                 .await
             {
                 Ok(mut claims) => {
-                    tracing::debug!("Auth: JWT validated successfully sub={} exp={}", claims.sub, claims.exp);
+                    tracing::debug!(
+                        "Auth: JWT validated successfully sub={} exp={}",
+                        claims.sub,
+                        claims.exp
+                    );
                     // Adaptive claims enrichment: fill missing groups/role from OIDC userinfo
                     // This makes NGHR work with Kanidm (no groups in AT) and Keycloak/Auth0 (groups in AT)
                     if let Err(e) = client
@@ -147,10 +151,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| {
-            s.strip_prefix("Bearer ")
-                .map(|token| token.to_string())
-        })
+        .and_then(|s| s.strip_prefix("Bearer ").map(|token| token.to_string()))
 }
 
 fn inject_mock_claims(req: &mut Request) {
@@ -161,9 +162,7 @@ fn inject_mock_claims(req: &mut Request) {
     );
     extra.insert(
         "groups".to_string(),
-        serde_json::Value::Array(vec![
-            serde_json::Value::String("developers".to_string()),
-        ]),
+        serde_json::Value::Array(vec![serde_json::Value::String("developers".to_string())]),
     );
 
     let claims = JwtClaims {

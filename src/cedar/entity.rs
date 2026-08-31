@@ -60,7 +60,10 @@ pub fn user_to_cedar_principal(claims: &JwtClaims) -> Entity {
             })
             .collect();
         if !set_exprs.is_empty() {
-            attrs.insert("groups".to_string(), RestrictedExpression::new_set(set_exprs));
+            attrs.insert(
+                "groups".to_string(),
+                RestrictedExpression::new_set(set_exprs),
+            );
         }
     }
 
@@ -68,6 +71,9 @@ pub fn user_to_cedar_principal(claims: &JwtClaims) -> Entity {
 }
 
 /// Build a Cedar EntityUid for a resource type and ID.
-pub fn build_resource_uid(entity_type: &str, id: &str) -> Result<EntityUid, pep::cedar::CedarError> {
+pub fn build_resource_uid(
+    entity_type: &str,
+    id: &str,
+) -> Result<EntityUid, pep::cedar::CedarError> {
     ResourceInfo::new(entity_type, id).to_cedar_uid()
 }

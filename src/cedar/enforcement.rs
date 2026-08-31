@@ -40,13 +40,12 @@ pub fn check_permission(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let resource =
-        pep::cedar::entity::ResourceInfo::new(entity_type, entity_id)
-            .to_cedar_uid()
-            .map_err(|e| {
-                tracing::error!("Cedar resource build failed: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+    let resource = pep::cedar::entity::ResourceInfo::new(entity_type, entity_id)
+        .to_cedar_uid()
+        .map_err(|e| {
+            tracing::error!("Cedar resource build failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Build principal entity with role/groups for attribute-based policies
     let principal_entity = crate::cedar::entity::user_to_cedar_principal(claims);
@@ -55,16 +54,17 @@ pub fn check_permission(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let request = Request::new(principal, action_uid, resource, Context::empty(), None).map_err(
-        |e| {
+    let request =
+        Request::new(principal, action_uid, resource, Context::empty(), None).map_err(|e| {
             tracing::error!("Cedar request build failed: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
-        },
-    )?;
+        })?;
 
     tracing::debug!(
         "Cedar eval: action={}, resource={}:{}",
-        action, entity_type, entity_id
+        action,
+        entity_type,
+        entity_id
     );
 
     let response = authorizer.is_allowed_with_entities(&request, &entities);
@@ -73,7 +73,11 @@ pub fn check_permission(
     if response.has_errors() {
         tracing::error!(
             "Cedar evaluation ERRORS for {} {} on {}:{} for user {}: {:?}",
-            action, entity_type, entity_type, entity_id, claims.sub,
+            action,
+            entity_type,
+            entity_type,
+            entity_id,
+            claims.sub,
             response.errors()
         );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -145,16 +149,21 @@ pub fn check_permission_scoped(
         .cloned()
         .map(|(k, v)| (k, RestrictedExpression::new_string(v)))
         .collect();
-    let resource_entity =
-        Entity::new(resource_uid.clone(), attrs, std::collections::HashSet::new()).map_err(|e| {
-            tracing::error!("Cedar resource entity build failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    let entities = Entities::from_entities([principal_entity, resource_entity], None).map_err(|e| {
-        tracing::error!("Cedar entities build failed: {}", e);
+    let resource_entity = Entity::new(
+        resource_uid.clone(),
+        attrs,
+        std::collections::HashSet::new(),
+    )
+    .map_err(|e| {
+        tracing::error!("Cedar resource entity build failed: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    let entities =
+        Entities::from_entities([principal_entity, resource_entity], None).map_err(|e| {
+            tracing::error!("Cedar entities build failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let request = Request::new(principal, action_uid, resource_uid, Context::empty(), None)
         .map_err(|e| {
@@ -167,7 +176,10 @@ pub fn check_permission_scoped(
     if response.has_errors() {
         tracing::error!(
             "Cedar evaluation ERRORS for {} on {}:{} for user {}: {:?}",
-            action, entity_type, entity_id, claims.sub,
+            action,
+            entity_type,
+            entity_id,
+            claims.sub,
             response.errors()
         );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -178,7 +190,10 @@ pub fn check_permission_scoped(
     } else {
         tracing::warn!(
             "Cedar denied {} on {}:{} for user {} (scoped: {} attrs)",
-            action, entity_type, entity_id, claims.sub,
+            action,
+            entity_type,
+            entity_id,
+            claims.sub,
             resource_attrs.len()
         );
         Err(StatusCode::FORBIDDEN)
@@ -216,10 +231,7 @@ mod tests {
             email: Some("tester@example.com".to_string()),
             claims_extra: role.map(|r| {
                 let mut extra = std::collections::HashMap::new();
-                extra.insert(
-                    "role".to_string(),
-                    serde_json::Value::String(r.to_string()),
-                );
+                extra.insert("role".to_string(), serde_json::Value::String(r.to_string()));
                 extra
             }),
         };
@@ -253,7 +265,13 @@ mod tests {
         // Negative control: viewer denied
         let viewer = claims_with_role(Some("viewer"));
         assert_eq!(
-            check_permission(&authorizer, &viewer, "CreateSemanticMemory", &resource_type, "<_>"),
+            check_permission(
+                &authorizer,
+                &viewer,
+                "CreateSemanticMemory",
+                &resource_type,
+                "<_>"
+            ),
             Err(StatusCode::FORBIDDEN)
         );
 
@@ -261,7 +279,13 @@ mod tests {
         // the policy guards with `has role` instead of accessing it)
         let norole = claims_with_role(None);
         assert_eq!(
-            check_permission(&authorizer, &norole, "CreateSemanticMemory", &resource_type, "<_>"),
+            check_permission(
+                &authorizer,
+                &norole,
+                "CreateSemanticMemory",
+                &resource_type,
+                "<_>"
+            ),
             Err(StatusCode::FORBIDDEN)
         );
     }
@@ -399,7 +423,10 @@ mod tests {
                 extra.insert(
                     "groups".to_string(),
                     serde_json::Value::Array(
-                        groups.iter().map(|g| serde_json::Value::String(g.to_string())).collect(),
+                        groups
+                            .iter()
+                            .map(|g| serde_json::Value::String(g.to_string()))
+                            .collect(),
                     ),
                 );
                 extra
