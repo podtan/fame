@@ -98,9 +98,8 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
 
         // Add enum values to status param if available
         if let Some(values) = config.status_values() {
-            list_params[0]["schema"]["enum"] = Value::Array(
-                values.iter().map(|v| Value::String(v.clone())).collect(),
-            );
+            list_params[0]["schema"]["enum"] =
+                Value::Array(values.iter().map(|v| Value::String(v.clone())).collect());
         }
 
         paths[&base_path] = json!({
@@ -170,6 +169,59 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
                 }
             }
         });
+
+        // PATCH /{base}/{id}/content — agent identity charters only (v0.3.0):
+        // the governed identity-content update surface (tocpi calls this for
+        // in-place re-chartering). Mirrors the tocpi content contract.
+        if config.slug == "agent-identity" {
+            paths[&format!("{}/{{id}}/content", base_path)] = json!({
+                "patch": {
+                    "operationId": format!("update_{}_content", config.slug),
+                    "tags": ["entities"],
+                    "parameters": [
+                        {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+                        {"name": "X-Instance-Id", "in": "header", "required": true, "schema": {"type": "string"}, "description": "Agent asset ID — identity content is instance-scoped (agent nested DB)"}
+                    ],
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "content": {"type": "string", "description": "New identity content (empty string = explicit wipe, logged)"}
+                                    },
+                                    "required": ["content"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Content updated in place (entity + old→new sha256 echo)",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "content_hash": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "old": {"type": ["string", "null"]},
+                                                    "new": {"type": "string"}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "400": {"description": "Missing X-Instance-Id or content field"},
+                        "403": {"description": "Cedar deny — principal outside the stored admin_group"},
+                        "404": {"description": "Identity not found (never create-on-miss)"}
+                    }
+                }
+            });
+        }
 
         // PATCH /{base}/{id}/status
         paths[&format!("{}/{{id}}/status", base_path)] = json!({

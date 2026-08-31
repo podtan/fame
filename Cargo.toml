@@ -1,6 +1,6 @@
 [package]
 name = "fame"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Fame — Facade for Agent Memory over PDT"
 license = "MIT OR Apache-2.0"
@@ -28,3 +28,6 @@ chrono = { version = "0.4", features = ["serde"] }
 pep = { version = "0.5", features = ["cedar", "axum", "config"] }
 cedar-policy = "4"
 futures = "0.3"
+
+# Content hashing (identity content updates echo old→new sha256)
+sha2 = "0.10"

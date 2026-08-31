@@ -20,7 +20,10 @@ use tracing::info;
 
 use crate::auth::{AuthenticatedUser, ForwardedToken, InstanceContext, WorkspaceAdmins};
 use crate::entity_config::{slug_to_cedar_type, EntityConfig};
-use crate::pdt::{AuthContext, CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset, PdtSearchResult};
+use crate::pdt::{
+    AuthContext, CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset,
+    PdtSearchResult,
+};
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -44,7 +47,10 @@ fn extract_field_value(
 ) -> Option<Value> {
     match field_map.as_deref() {
         Some("title_suffix") => {
-            let title = asset.title.strip_prefix(&config.title_prefix).unwrap_or(&asset.title);
+            let title = asset
+                .title
+                .strip_prefix(&config.title_prefix)
+                .unwrap_or(&asset.title);
             if title.is_empty() {
                 None
             } else {
@@ -60,7 +66,9 @@ fn extract_field_value(
         }
         Some(m) if m.starts_with("tag:") => {
             let tag_name = &m[4..];
-            asset.get_tag(tag_name).map(|s| Value::String(s.to_string()))
+            asset
+                .get_tag(tag_name)
+                .map(|s| Value::String(s.to_string()))
         }
         Some(m) if m.starts_with("metadata:") => {
             let key = &m[9..];
@@ -70,7 +78,9 @@ fn extract_field_value(
         Some("updated_at") => Some(Value::String(asset.updated_at.clone())),
         _ => {
             // No mapping hint — try tag with the field name as category
-            asset.get_tag(field_name).map(|s| Value::String(s.to_string()))
+            asset
+                .get_tag(field_name)
+                .map(|s| Value::String(s.to_string()))
         }
     }
 }
@@ -87,7 +97,10 @@ fn extract_field_value_compact(
 ) -> Option<Value> {
     match field_map.as_deref() {
         Some("title_suffix") => {
-            let title = result.title.strip_prefix(&config.title_prefix).unwrap_or(&result.title);
+            let title = result
+                .title
+                .strip_prefix(&config.title_prefix)
+                .unwrap_or(&result.title);
             if title.is_empty() {
                 None
             } else {
@@ -97,11 +110,15 @@ fn extract_field_value_compact(
         Some("content") => None, // Not available in compact results
         Some(m) if m.starts_with("tag:") => {
             let tag_name = &m[4..];
-            result.get_tag(tag_name).map(|s| Value::String(s.to_string()))
+            result
+                .get_tag(tag_name)
+                .map(|s| Value::String(s.to_string()))
         }
         Some(m) if m.starts_with("metadata:") => None, // Not available in compact results
         Some("created_at") | Some("updated_at") => Some(Value::String(result.updated_at.clone())),
-        _ => result.get_tag(field_name).map(|s| Value::String(s.to_string())),
+        _ => result
+            .get_tag(field_name)
+            .map(|s| Value::String(s.to_string())),
     }
 }
 
@@ -165,7 +182,8 @@ pub fn map_compact_to_entity(result: &PdtSearchResult, config: &EntityConfig) ->
     entity.insert("id".to_string(), Value::String(result.id.clone()));
 
     for (field_name, field_config) in &config.fields {
-        if let Some(v) = extract_field_value_compact(result, field_name, &field_config.map, config) {
+        if let Some(v) = extract_field_value_compact(result, field_name, &field_config.map, config)
+        {
             entity.insert(field_name.clone(), v);
         }
     }
@@ -186,7 +204,15 @@ pub async fn map_asset_to_entity_with_relations(
         _ => return Value::Null,
     };
 
-    resolve_relations(state, instance_id, &asset.id, config, &mut entity_json, token).await;
+    resolve_relations(
+        state,
+        instance_id,
+        &asset.id,
+        config,
+        &mut entity_json,
+        token,
+    )
+    .await;
 
     Value::Object(entity_json)
 }
@@ -248,13 +274,17 @@ async fn list_entities_inner(
     // If attached_to filter is set, we need to find assets related to that ID
     let mut entities: Vec<Value> = if let Some(ref attached_to_id) = query.attached_to {
         // 1. Find all assets of this type
-        let results = pdt.search_by_tag("type", type_tag, token)
+        let results = pdt
+            .search_by_tag("type", type_tag, token)
             .await
             .unwrap_or_default();
 
         // Filter by agent_id (X-Instance-Id) for per-agent memory isolation
         let results: Vec<PdtSearchResult> = if let Some(ref agent_id) = instance_id {
-            results.into_iter().filter(|r| r.get_tag("agent") == Some(agent_id)).collect()
+            results
+                .into_iter()
+                .filter(|r| r.get_tag("agent") == Some(agent_id))
+                .collect()
         } else {
             results
         };
@@ -269,12 +299,9 @@ async fn list_entities_inner(
                 let has_relation = relations.iter().any(|rel| {
                     rel.from_asset_id == r.id
                         && rel.to_asset_id == *attached_to_id
-                        && config
-                            .relation_fields()
-                            .iter()
-                            .any(|(_, fc)| {
-                                fc.relation_type.as_deref() == Some(rel.relation_type.as_str())
-                            })
+                        && config.relation_fields().iter().any(|(_, fc)| {
+                            fc.relation_type.as_deref() == Some(rel.relation_type.as_str())
+                        })
                 });
                 if has_relation {
                     let entity = map_compact_to_entity(r, &config);
@@ -284,13 +311,17 @@ async fn list_entities_inner(
         }
         filtered
     } else {
-        let results = pdt.search_by_tag("type", type_tag, token)
+        let results = pdt
+            .search_by_tag("type", type_tag, token)
             .await
             .unwrap_or_default();
 
         // Filter by agent_id (X-Instance-Id) for per-agent memory isolation
         let results: Vec<PdtSearchResult> = if let Some(ref agent_id) = instance_id {
-            results.into_iter().filter(|r| r.get_tag("agent") == Some(agent_id)).collect()
+            results
+                .into_iter()
+                .filter(|r| r.get_tag("agent") == Some(agent_id))
+                .collect()
         } else {
             results
         };
@@ -360,14 +391,10 @@ async fn get_entity_inner(
         )
     })?;
 
-    let asset = pdt.get_asset(id, token)
+    let asset = pdt
+        .get_asset(id, token)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e.to_string()}))))?;
 
     // Type guard: an asset requested via /semantic-memory/{id} must actually
     // BE a semantic memory. Without this, any asset ID from the same
@@ -381,7 +408,8 @@ async fn get_entity_inner(
         ));
     }
 
-    let entity = map_asset_to_entity_with_relations(state, instance_id, &asset, &config, token).await;
+    let entity =
+        map_asset_to_entity_with_relations(state, instance_id, &asset, &config, token).await;
 
     Ok(Json(entity))
 }
@@ -619,7 +647,8 @@ async fn create_entity_inner(
     }
 
     // --- Create the PDT asset ---
-    let asset = pdt.create_asset(
+    let asset = pdt
+        .create_asset(
             CreateAssetRequest {
                 title,
                 content,
@@ -638,7 +667,8 @@ async fn create_entity_inner(
 
     // If metadata was provided, update the asset to include it
     if !metadata.is_empty() {
-        let mut metadata_req = pdt.http_client()
+        let mut metadata_req = pdt
+            .http_client()
             .put(format!("{}/api/assets/{}", pdt.base_url(), asset.id))
             .bearer_auth(token.unwrap_or(""));
         if let Some(id) = instance_id {
@@ -650,7 +680,10 @@ async fn create_entity_inner(
             .await;
     }
 
-    info!("Created {} entity: {} ({})", config.name, title_value, asset.id);
+    info!(
+        "Created {} entity: {} ({})",
+        config.name, title_value, asset.id
+    );
 
     // --- Create relations ---
     for (field_name, field_config) in config.relation_fields() {
@@ -781,13 +814,10 @@ async fn update_entity_status_inner(
                             .get(crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY)
                             .and_then(|v| v.as_str())
                             .map(|g| {
-                                vec![
-                                    (
-                                        crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY
-                                            .to_string(),
-                                        g.to_string(),
-                                    ),
-                                ]
+                                vec![(
+                                    crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY.to_string(),
+                                    g.to_string(),
+                                )]
                             })
                     })
                     .unwrap_or_default()
@@ -806,15 +836,12 @@ async fn update_entity_status_inner(
         }
     }
 
-    let new_status = body
-        .get("status")
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Missing 'status' field"})),
-            )
-        })?;
+    let new_status = body.get("status").and_then(|s| s.as_str()).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Missing 'status' field"})),
+        )
+    })?;
 
     // Validate status is in allowed values
     if let Some(allowed) = config.status_values() {
@@ -830,7 +857,8 @@ async fn update_entity_status_inner(
         }
     }
 
-    let asset = pdt.update_asset_tag(id, "status", new_status, token)
+    let asset = pdt
+        .update_asset_tag(id, "status", new_status, token)
         .await
         .map_err(|e| {
             (
@@ -839,7 +867,151 @@ async fn update_entity_status_inner(
             )
         })?;
 
-    let entity = map_asset_to_entity_with_relations(state, instance_id, &asset, &config, token).await;
+    let entity =
+        map_asset_to_entity_with_relations(state, instance_id, &asset, &config, token).await;
+
+    Ok(Json(entity))
+}
+
+/// Update an agent identity's content (charter). PATCH /api/v1/{slug}s/{id}/content
+///
+/// Agent-identity only (v0.3.0) — the identity content update surface that
+/// Cedar `EditAgentIdentity` was designed for but that never shipped. The
+/// tocpi control plane (PATCH /api/agents/{id}) calls this so content lands
+/// in place as the agent's live identity — update, never duplicate.
+///
+/// Semantics mirror tocpi v0.6.0 for consistency:
+/// - `content` required; empty string = explicit wipe (logged loudly)
+/// - response echoes old→new sha256 so callers verify what landed
+/// - unknown id → loud 404, NEVER create-on-miss (provisioning is tocpi's
+///   job via the create route)
+/// - content only — title/status stay on their existing surfaces
+///
+/// Authorization reuses the wired workspace-scoped `EditAgentIdentity` path:
+/// the anchor comes from the STORED asset metadata (admin_group), never from
+/// a caller header.
+///
+/// Instance scoping is REQUIRED: identity assets live in the agent's nested
+/// DB (created via X-Instance-Id routing). A request without the header
+/// would silently look in the global DB — rejected with 400 instead.
+async fn update_identity_content_inner(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    token: Option<&str>,
+    instance_id: Option<&str>,
+    slug: &str,
+    id: &str,
+    body: Value,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let instance_id = instance_id.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "X-Instance-Id header required: agent identity content                 updates are instance-scoped (the identity lives in the agent's nested DB)"})),
+        )
+    })?;
+    let pdt = state.pdt.for_instance(Some(instance_id));
+    let config = get_entity_config(state, slug).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("Unknown entity type: {}", slug)})),
+        )
+    })?;
+
+    // Loud 404 BEFORE authorization: an unknown id is a caller error, not an
+    // access-control outcome, and the Cedar check needs the stored
+    // admin_group from the asset anyway.
+    let asset = pdt.get_asset(id, token).await.map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("Agent identity not found: {} ({})", id, e)})),
+        )
+    })?;
+
+    // Cedar authorization check — same slug-derived resource type and
+    // workspace scoping as the status update: the anchor comes from the
+    // STORED asset metadata (admin_group), never from a caller header.
+    if let Some(ref authorizer) = state.authorizer {
+        if let Some(ref action) = config.cedar.action_edit {
+            let claims = user.to_cedar_claims();
+            let resource_attrs: Vec<(String, String)> = asset
+                .metadata
+                .get(crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY)
+                .and_then(|v| v.as_str())
+                .map(|g| {
+                    vec![(
+                        crate::cedar::enforcement::ADMIN_GROUP_METADATA_KEY.to_string(),
+                        g.to_string(),
+                    )]
+                })
+                .unwrap_or_default();
+            crate::cedar::enforcement::check_permission_scoped(
+                authorizer,
+                &claims,
+                action,
+                &slug_to_cedar_type(&config.slug),
+                id,
+                &resource_attrs,
+            )
+            .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
+        }
+    }
+
+    // Content extraction: required, must be a string. Empty = explicit wipe.
+    let new_content = body
+        .get("content")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Missing or non-string 'content' field"})),
+            )
+        })?
+        .to_string();
+    if new_content.trim().is_empty() {
+        tracing::warn!(
+            "EXPLICIT CONTENT WIPE: user {} wiped content of agent identity {}",
+            user.user_id,
+            id
+        );
+    }
+
+    // old→new sha256 echo (parity with tocpi v0.6.0)
+    use sha2::Digest;
+    let hash = |s: &str| format!("sha256:{:x}", sha2::Sha256::digest(s.as_bytes()));
+    let old_hash = if asset.content.is_empty() {
+        None
+    } else {
+        Some(hash(&asset.content))
+    };
+
+    let asset = pdt
+        .update_asset_content(id, &new_content, token)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Failed to update identity content: {}", e)})),
+            )
+        })?;
+
+    tracing::info!(
+        "Agent identity {} content updated by user {} ({} chars)",
+        id,
+        user.user_id,
+        new_content.len()
+    );
+
+    let mut entity =
+        map_asset_to_entity_with_relations(state, Some(instance_id), &asset, &config, token).await;
+    if let Some(obj) = entity.as_object_mut() {
+        obj.insert(
+            "content_hash".to_string(),
+            json!({
+                "old": old_hash,
+                "new": hash(&new_content),
+            }),
+        );
+    }
 
     Ok(Json(entity))
 }
@@ -883,58 +1055,124 @@ pub fn register_entity_routes(
         let slug_for_list = slug.clone();
         router = router.route(
             &base,
-            get(move |State(state): State<AppState>,
+            get(
+                move |State(state): State<AppState>,
                       ForwardedToken(token): ForwardedToken,
-    instance: InstanceContext,
+                      instance: InstanceContext,
                       Query(query): Query<ListEntitiesQuery>| {
-                let slug = slug_for_list.clone();
-                async move {
-                    list_entities_inner(&state, token.as_deref(), instance.as_deref(), &slug, &query).await
-                }
-            })
-            .post(move |State(state): State<AppState>,
-                        user: AuthenticatedUser,
-                        ForwardedToken(token): ForwardedToken,
-    instance: InstanceContext,
-                        workspace_admins: WorkspaceAdmins,
-                        Json(body): Json<Value>| {
-                let slug = slug.clone();
-                async move {
-                    create_entity_inner(&state, &user, token.as_deref(), instance.as_deref(), &slug, body, workspace_admins).await
-                }
-            }),
+                    let slug = slug_for_list.clone();
+                    async move {
+                        list_entities_inner(
+                            &state,
+                            token.as_deref(),
+                            instance.as_deref(),
+                            &slug,
+                            &query,
+                        )
+                        .await
+                    }
+                },
+            )
+            .post(
+                move |State(state): State<AppState>,
+                      user: AuthenticatedUser,
+                      ForwardedToken(token): ForwardedToken,
+                      instance: InstanceContext,
+                      workspace_admins: WorkspaceAdmins,
+                      Json(body): Json<Value>| {
+                    let slug = slug.clone();
+                    async move {
+                        create_entity_inner(
+                            &state,
+                            &user,
+                            token.as_deref(),
+                            instance.as_deref(),
+                            &slug,
+                            body,
+                            workspace_admins,
+                        )
+                        .await
+                    }
+                },
+            ),
         );
 
         // GET /api/v1/{slug}s/{id}
         let slug_for_get = config.slug.clone();
         router = router.route(
             &format!("{}/{{id}}", base),
-            get(move |State(state): State<AppState>,
+            get(
+                move |State(state): State<AppState>,
                       ForwardedToken(token): ForwardedToken,
-    instance: InstanceContext,
+                      instance: InstanceContext,
                       Path(id): Path<String>| {
-                let slug = slug_for_get.clone();
-                async move {
-                    get_entity_inner(&state, token.as_deref(), instance.as_deref(), &slug, &id).await
-                }
-            }),
+                    let slug = slug_for_get.clone();
+                    async move {
+                        get_entity_inner(&state, token.as_deref(), instance.as_deref(), &slug, &id)
+                            .await
+                    }
+                },
+            ),
         );
+
+        // PATCH /api/v1/{slug}s/{id}/content — agent identity charters only
+        // (v0.3.0): the governed identity-content write path. Scoped to
+        // agent-identity on purpose; other entities keep their surfaces.
+        if config.slug == "agent-identity" {
+            let slug_for_content = config.slug.clone();
+            router = router.route(
+                &format!("{}/{{id}}/content", base),
+                patch(
+                    move |State(state): State<AppState>,
+                          user: AuthenticatedUser,
+                          ForwardedToken(token): ForwardedToken,
+                          instance: InstanceContext,
+                          Path(id): Path<String>,
+                          Json(body): Json<Value>| {
+                        let slug = slug_for_content.clone();
+                        async move {
+                            update_identity_content_inner(
+                                &state,
+                                &user,
+                                token.as_deref(),
+                                instance.as_deref(),
+                                &slug,
+                                &id,
+                                body,
+                            )
+                            .await
+                        }
+                    },
+                ),
+            );
+        }
 
         // PATCH /api/v1/{slug}s/{id}/status
         let slug_for_patch = config.slug.clone();
         router = router.route(
             &format!("{}/{{id}}/status", base),
-            patch(move |State(state): State<AppState>,
-                        user: AuthenticatedUser,
-                        ForwardedToken(token): ForwardedToken,
-    instance: InstanceContext,
-                        Path(id): Path<String>,
-                        Json(body): Json<Value>| {
-                let slug = slug_for_patch.clone();
-                async move {
-                    update_entity_status_inner(&state, &user, token.as_deref(), instance.as_deref(), &slug, &id, body).await
-                }
-            }),
+            patch(
+                move |State(state): State<AppState>,
+                      user: AuthenticatedUser,
+                      ForwardedToken(token): ForwardedToken,
+                      instance: InstanceContext,
+                      Path(id): Path<String>,
+                      Json(body): Json<Value>| {
+                    let slug = slug_for_patch.clone();
+                    async move {
+                        update_entity_status_inner(
+                            &state,
+                            &user,
+                            token.as_deref(),
+                            instance.as_deref(),
+                            &slug,
+                            &id,
+                            body,
+                        )
+                        .await
+                    }
+                },
+            ),
         );
     }
 
@@ -942,9 +1180,7 @@ pub fn register_entity_routes(
 }
 
 /// Serve available entity configs (for Torpi to discover).
-pub async fn list_entity_configs(
-    State(state): State<AppState>,
-) -> Json<Value> {
+pub async fn list_entity_configs(State(state): State<AppState>) -> Json<Value> {
     let configs: Vec<Value> = state
         .entity_configs
         .iter()
@@ -978,4 +1214,411 @@ pub async fn list_entity_configs(
         "entities": configs,
         "total": configs.len(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Tests — update_identity_content_inner: mock PDT + real Cedar policies
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod identity_content_tests {
+    //! Integration tests for update_identity_content_inner against a REAL
+    //! PDT server (dev mode: AUTH_ENABLED=false + AUTH_DEV_MODE=true,
+    //! sqlite backend) — per owner directive, real wire over mocks.
+    //! Requires the pdt binary: built on demand from the sibling checkout.
+
+    use super::*;
+    use crate::pdt::{CreateAssetRequest, CreateTagRequest, PdtClient};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    const ADMIN_GROUP: &str = "ws-1-admins";
+    const OLD: &str = "old charter";
+    const NEW: &str = "new charter";
+
+    fn user_with(role: &str, groups: &[&str]) -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: "user-test".to_string(),
+            username: Some("tester".to_string()),
+            email: None,
+            claims_extra: Some(std::collections::HashMap::from([
+                (
+                    "role".to_string(),
+                    serde_json::Value::String(role.to_string()),
+                ),
+                (
+                    "groups".to_string(),
+                    serde_json::Value::Array(
+                        groups
+                            .iter()
+                            .map(|g| serde_json::Value::String(g.to_string()))
+                            .collect(),
+                    ),
+                ),
+            ])),
+        }
+    }
+
+    fn sha_hex(s: &str) -> String {
+        use sha2::Digest;
+        format!("sha256:{:x}", sha2::Sha256::digest(s.as_bytes()))
+    }
+
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+
+    struct PdtProc(Child);
+    impl Drop for PdtProc {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Boot a real PDT (sqlite, dev-auth) on a free port; returns base URL.
+    async fn spawn_real_pdt() -> (String, PdtProc, std::path::PathBuf) {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let pdt_dir = manifest
+            .parent()
+            .expect("fame lives in a parent dir")
+            .join("pdt");
+        let bin = pdt_dir.join("target/debug/pdt");
+        if !bin.exists() {
+            let status = Command::new("cargo")
+                .args([
+                    "build",
+                    "--no-default-features",
+                    "--features",
+                    "sqlite-backend",
+                ])
+                .current_dir(&pdt_dir)
+                .status()
+                .expect("failed to run cargo for pdt build — is the sibling pdt checkout present?");
+            assert!(status.success(), "pdt build failed");
+        }
+
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        let tmp = std::env::temp_dir().join(format!("fame-pdt-it-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("instances")).expect("tmp instances dir");
+
+        // Free port: bind + drop (small race, acceptable for tests).
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+
+        let child = Command::new(&bin)
+            .env("PDT_HOST", "127.0.0.1")
+            .env("PDT_PORT", port.to_string())
+            .env("PDT_DB_BACKEND", "sqlite")
+            .env("SQLITE_PATH", tmp.join("global.db"))
+            .env("PDT_INSTANCES_DIR", tmp.join("instances"))
+            .env("AUTH_ENABLED", "false")
+            .env("AUTH_DEV_MODE", "true")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn pdt");
+
+        let base = format!("http://127.0.0.1:{port}");
+        let http = reqwest::Client::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if tokio::time::Instant::now() > deadline {
+                panic!("pdt did not become healthy at {base} — check its stderr");
+            }
+            if let Ok(resp) = http.get(format!("{base}/health")).send().await {
+                if resp.status().is_success() {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        (base, PdtProc(child), tmp)
+    }
+
+    struct TestEnv {
+        state: AppState,
+        base: String,
+        ws: String,
+        agent: String,
+        identity_id: String,
+        _proc: PdtProc,
+    }
+
+    async fn test_env() -> TestEnv {
+        let (base, proc, _tmp) = spawn_real_pdt().await;
+        let http = reqwest::Client::new();
+
+        // Provision workspace, then the agent's nested child DB — the same
+        // explicit provisioning the control plane does in production.
+        let ws = uuid::Uuid::new_v4().to_string();
+        let agent = uuid::Uuid::new_v4().to_string();
+        for (id, parent) in [(&ws, None), (&agent, Some(&ws))] {
+            let mut req = http
+                .post(format!("{base}/api/instances/{id}/provision"))
+                .query(&[("parent", parent.map(|p| p.to_string()))]);
+            let resp = req.send().await.expect("provision request");
+            assert!(
+                resp.status().is_success(),
+                "provision {id} failed: {}",
+                resp.status()
+            );
+        }
+
+        // Real Cedar authorizer over the same embedded policies prod uses.
+        let cedar_config: pep::cedar::CedarConfig = crate::config::CedarConfig {
+            enabled: true,
+            policy_path: "./policies".to_string(),
+            schema_path: "./policies/schema.cedarschema".to_string(),
+            validate_on_load: true,
+            policy_store_url: None,
+            policy_store_token: None,
+        }
+        .into();
+        let authorizer = pep::cedar::CedarAuthorizer::new_with_policy_store(cedar_config)
+            .await
+            .expect("authorizer loads from embedded policies");
+
+        // Real entity configs from the repo's entities/ directory.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("entities");
+        let entity_configs: Vec<_> =
+            crate::entity_config::load_entity_configs(dir.to_str().unwrap())
+                .into_iter()
+                .map(Arc::new)
+                .collect();
+        assert!(entity_configs.iter().any(|c| c.slug == "agent-identity"));
+
+        let config: crate::config::Config =
+            toml::from_str(&format!("host = '127.0.0.1'\nport = 0\npdt_url = '{base}'"))
+                .expect("minimal test config parses");
+        let state = AppState {
+            config: Arc::new(config),
+            pdt: Arc::new(PdtClient::new(&base)),
+            authorizer: Some(Arc::new(authorizer)),
+            entity_configs,
+        };
+
+        // Seed the identity asset THROUGH fame's own client (real wire),
+        // then persist the workspace admin_group anchor the way the create
+        // flow does (raw PUT with X-Instance-Id).
+        let identity = state
+            .pdt
+            .for_instance(Some(&agent))
+            .create_asset(
+                CreateAssetRequest {
+                    title: "Identity: Test Agent".to_string(),
+                    content: Some(OLD.to_string()),
+                    tags: Some(vec![
+                        CreateTagRequest {
+                            category: "type".to_string(),
+                            value: "agent-identity".to_string(),
+                        },
+                        CreateTagRequest {
+                            category: "agent".to_string(),
+                            value: agent.clone(),
+                        },
+                    ]),
+                    auth_context: None,
+                },
+                None,
+            )
+            .await
+            .expect("seed identity via real PDT");
+        let resp = http
+            .put(format!("{base}/api/assets/{}", identity.id))
+            .header("X-Instance-Id", &agent)
+            .json(&serde_json::json!({ "metadata": { "admin_group": ADMIN_GROUP } }))
+            .send()
+            .await
+            .expect("metadata patch");
+        assert!(resp.status().is_success(), "metadata patch failed");
+
+        TestEnv {
+            state,
+            base,
+            ws,
+            agent,
+            identity_id: identity.id,
+            _proc: proc,
+        }
+    }
+
+    fn body(content: &str) -> Value {
+        serde_json::json!({ "content": content })
+    }
+
+    async fn call(
+        env: &TestEnv,
+        user: &AuthenticatedUser,
+        instance: Option<&str>,
+        id: &str,
+        body: Value,
+    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+        update_identity_content_inner(&env.state, user, None, instance, "agent-identity", id, body)
+            .await
+    }
+
+    /// Roundtrip: content lands in place via the real PDT, hashes echo,
+    /// exactly ONE identity record exists (no duplicates), agent count unchanged.
+    #[tokio::test]
+    async fn roundtrip_updates_in_place_with_hash_echo() {
+        let env = test_env().await;
+        let resp = call(
+            &env,
+            &user_with("user", &[ADMIN_GROUP]),
+            Some(&env.agent),
+            &env.identity_id,
+            body(NEW),
+        )
+        .await
+        .expect("scoped user may edit identity content");
+
+        let resp = resp.0;
+        assert_eq!(resp["content"], NEW, "content lands");
+        assert_eq!(resp["content_hash"]["old"], sha_hex(OLD), "old hash echoes");
+        assert_eq!(resp["content_hash"]["new"], sha_hex(NEW), "new hash echoes");
+
+        let inst = env.state.pdt.for_instance(Some(&env.agent));
+        let read = inst
+            .get_asset(&env.identity_id, None)
+            .await
+            .expect("identity readable");
+        assert_eq!(read.content, NEW);
+        let idents = inst
+            .search_by_tag("type", "agent-identity", None)
+            .await
+            .expect("identity search");
+        assert_eq!(idents.len(), 1, "zero duplicate identity records");
+    }
+
+    /// Unknown identity → loud 404, never create-on-miss.
+    #[tokio::test]
+    async fn unknown_identity_is_loud_404() {
+        let env = test_env().await;
+        let err = call(
+            &env,
+            &user_with("admin", &[]),
+            Some(&env.agent),
+            "ident-missing",
+            body(NEW),
+        )
+        .await
+        .expect_err("unknown id must 404");
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+        assert!(
+            err.1 .0["error"]
+                .as_str()
+                .unwrap()
+                .contains("Agent identity not found"),
+            "loud message: {}",
+            err.1 .0
+        );
+    }
+
+    /// Cedar deny: principal outside the workspace admin_group cannot edit.
+    #[tokio::test]
+    async fn cedar_denies_principal_outside_admin_group() {
+        let env = test_env().await;
+        let err = call(
+            &env,
+            &user_with("user", &["some-other-group"]),
+            Some(&env.agent),
+            &env.identity_id,
+            body(NEW),
+        )
+        .await
+        .expect_err("out-of-group user must be denied");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1 .0["error"], "Access denied");
+        let asset = env
+            .state
+            .pdt
+            .for_instance(Some(&env.agent))
+            .get_asset(&env.identity_id, None)
+            .await
+            .unwrap();
+        assert_eq!(asset.content, OLD, "denied write must not land");
+    }
+
+    /// Admin role bypasses group scoping (policy: admin permits all).
+    #[tokio::test]
+    async fn admin_role_edits_without_group() {
+        let env = test_env().await;
+        let resp = call(
+            &env,
+            &user_with("admin", &[]),
+            Some(&env.agent),
+            &env.identity_id,
+            body(NEW),
+        )
+        .await
+        .expect("admin may edit");
+        assert_eq!(resp.0["content"], NEW);
+    }
+
+    /// Agent role can edit its own identity (own nested DB via instance header).
+    #[tokio::test]
+    async fn agent_role_edits_own_identity() {
+        let env = test_env().await;
+        let resp = call(
+            &env,
+            &user_with("agent", &[]),
+            Some(&env.agent),
+            &env.identity_id,
+            body("self-written charter"),
+        )
+        .await
+        .expect("agent may edit own identity");
+        assert_eq!(resp.0["content"], "self-written charter");
+    }
+
+    /// Empty content = explicit wipe: allowed, stored empty.
+    #[tokio::test]
+    async fn empty_content_is_explicit_wipe() {
+        let env = test_env().await;
+        let resp = call(
+            &env,
+            &user_with("user", &[ADMIN_GROUP]),
+            Some(&env.agent),
+            &env.identity_id,
+            body(""),
+        )
+        .await
+        .expect("explicit wipe allowed");
+        // The entity mapper omits empty fields — verify the wipe through the
+        // hash echo and the stored asset, not the mapped content field.
+        assert_eq!(resp.0["content_hash"]["new"], sha_hex(""));
+        let asset = env
+            .state
+            .pdt
+            .for_instance(Some(&env.agent))
+            .get_asset(&env.identity_id, None)
+            .await
+            .unwrap();
+        assert_eq!(asset.content, "", "wipe stored as empty string");
+    }
+
+    /// Missing instance header → loud 400: identity content is
+    /// instance-scoped; a global-DB lookup would silently miss.
+    #[tokio::test]
+    async fn missing_instance_header_is_loud_400() {
+        let env = test_env().await;
+        let err = call(
+            &env,
+            &user_with("admin", &[]),
+            None,
+            &env.identity_id,
+            body(NEW),
+        )
+        .await
+        .expect_err("missing instance header must 400");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(
+            err.1 .0["error"]
+                .as_str()
+                .unwrap()
+                .contains("X-Instance-Id header required"),
+            "loud message: {}",
+            err.1 .0
+        );
+    }
 }
