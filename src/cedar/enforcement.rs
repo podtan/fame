@@ -323,7 +323,8 @@ mod tests {
             Err(StatusCode::FORBIDDEN)
         );
 
-        // Denied for agent: identity creation is conductor/admin-only
+        // Allowed for agent: identity bootstrap create (charter flow,
+        // v0.3.2+ — managers provision their reports' empty identities)
         assert_eq!(
             check_permission(
                 &authorizer,
@@ -332,7 +333,7 @@ mod tests {
                 &crate::entity_config::slug_to_cedar_type("agent-identity"),
                 "<_>"
             ),
-            Err(StatusCode::FORBIDDEN)
+            Ok(())
         );
     }
 

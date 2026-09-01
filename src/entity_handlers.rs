@@ -1843,16 +1843,19 @@ mod identity_content_tests {
         let env = test_env().await;
         let report_instance = uuid::Uuid::new_v4().to_string();
         let new_id = uuid::Uuid::new_v4().to_string();
-        let resp = call(
-            &env,
+        let resp = create_entity_inner(
+            &env.state,
             &user_with("agent", &[]),
+            None,
             Some(&report_instance),
-            &new_id,
+            "agent-identity",
             body(NEW),
+            WorkspaceAdmins(None),
         )
         .await
         .expect("manager agent may bootstrap a report identity");
-        assert_eq!(resp.0["content"], NEW);
+        assert_eq!(resp.0, StatusCode::CREATED);
+        assert_eq!(resp.1 .0["content"], NEW);
     }
 
     /// Tocpi's service principal may bootstrap identity content too
@@ -1862,16 +1865,19 @@ mod identity_content_tests {
         let env = test_env().await;
         let report_instance = uuid::Uuid::new_v4().to_string();
         let new_id = uuid::Uuid::new_v4().to_string();
-        let resp = call(
-            &env,
+        let resp = create_entity_inner(
+            &env.state,
             &user_with("service", &[]),
+            None,
             Some(&report_instance),
-            &new_id,
+            "agent-identity",
             body(NEW),
+            WorkspaceAdmins(None),
         )
         .await
         .expect("service principal may bootstrap identity");
-        assert_eq!(resp.0["content"], NEW);
+        assert_eq!(resp.0, StatusCode::CREATED);
+        assert_eq!(resp.1 .0["content"], NEW);
     }
 
 }
