@@ -1849,7 +1849,7 @@ mod identity_content_tests {
             None,
             Some(&report_instance),
             "agent-identity",
-            body(NEW),
+            serde_json::json!({"title": "Provisioned identity (bootstrap)", "content": NEW}),
             WorkspaceAdmins(None),
         )
         .await
@@ -1871,7 +1871,7 @@ mod identity_content_tests {
             None,
             Some(&report_instance),
             "agent-identity",
-            body(NEW),
+            serde_json::json!({"title": "Provisioned identity (bootstrap)", "content": NEW}),
             WorkspaceAdmins(None),
         )
         .await
