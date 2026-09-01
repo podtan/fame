@@ -57,10 +57,25 @@ permit (
         Action::"EditProceduralMemory",
         Action::"ViewAgentIdentity",
         Action::"EditAgentIdentity",
+        Action::"CreateAgentIdentity",
     ],
     resource
 )
 when { principal has role && principal.role == "agent" };
+
+// Service role — tocpi control-plane bootstrap: may create, view, and
+// update agent identities on behalf of the platform (charter provisioning).
+// Memory ops, deletes, and admin surfaces stay denied (default deny).
+permit (
+    principal,
+    action in [
+        Action::"CreateAgentIdentity",
+        Action::"ViewAgentIdentity",
+        Action::"EditAgentIdentity",
+    ],
+    resource
+)
+when { principal has role && principal.role == "service" };
 
 // Developer role — can view and create memories for debugging, view identity
 permit (

@@ -1834,4 +1834,44 @@ mod identity_content_tests {
             err.1 .0
         );
     }
+
+    /// Manager-agent bootstrap: role=agent may CREATE a missing identity in
+    /// a report agent's home instance (charter provisioning, fame 0.3.2).
+    /// This is the exact Farzan→Saman/Ravand/Bonyan charter flow.
+    #[tokio::test]
+    async fn agent_role_creates_missing_identity_allowed() {
+        let env = test_env().await;
+        let report_instance = uuid::Uuid::new_v4().to_string();
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let resp = call(
+            &env,
+            &user_with("agent", &[]),
+            Some(&report_instance),
+            &new_id,
+            body(NEW),
+        )
+        .await
+        .expect("manager agent may bootstrap a report identity");
+        assert_eq!(resp.0["content"], NEW);
+    }
+
+    /// Tocpi's service principal may bootstrap identity content too
+    /// (control-plane provisioning on behalf of the platform).
+    #[tokio::test]
+    async fn service_role_creates_missing_identity_allowed() {
+        let env = test_env().await;
+        let report_instance = uuid::Uuid::new_v4().to_string();
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let resp = call(
+            &env,
+            &user_with("service", &[]),
+            Some(&report_instance),
+            &new_id,
+            body(NEW),
+        )
+        .await
+        .expect("service principal may bootstrap identity");
+        assert_eq!(resp.0["content"], NEW);
+    }
+
 }

@@ -1,6 +1,6 @@
 [package]
 name = "fame"
-version = "0.3.0"
+version = "0.3.2"
 edition = "2021"
 description = "Fame — Facade for Agent Memory over PDT"
 license = "MIT OR Apache-2.0"
