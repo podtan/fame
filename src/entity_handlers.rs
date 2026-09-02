@@ -1769,20 +1769,118 @@ mod identity_content_tests {
         assert_eq!(resp.0["content"], NEW);
     }
 
-    /// Agent role can edit its own identity (own nested DB via instance header).
+    /// GUARD 3 (Phase 1): agent PATCH on its own identity → ALLOW. Prod
+    /// shape: tocpi v0.6.3 stamps the identity admin_group = the agent's
+    /// mem-* group, so the caller's own group matches by construction.
     #[tokio::test]
     async fn agent_role_edits_own_identity() {
         let env = test_env().await;
         let resp = call(
             &env,
-            &user_with("agent", &[]),
+            &user_with("agent", &[ADMIN_GROUP]),
             Some(&env.agent),
             &env.identity_id,
             body("self-written charter"),
         )
         .await
-        .expect("agent may edit own identity");
+        .expect("agent may edit own identity — admin_group matches its group");
         assert_eq!(resp.0["content"], "self-written charter");
+    }
+
+    /// GUARD 1 (Phase 1): cross-agent PATCH → DENY VIA CEDAR — the policy
+    /// decision itself ("Access denied" from the scoped EditAgentIdentity
+    /// permit), NOT a downstream registry-resolution accident. The asset is
+    /// fully resolvable here; only the policy says no.
+    #[tokio::test]
+    async fn agent_edit_cross_identity_denied_via_cedar() {
+        let env = test_env().await;
+        // Another agent (mem-<other> ≠ the identity's admin_group).
+        let err = call(
+            &env,
+            &user_with("agent", &["mem-someoneelse"]),
+            Some(&env.agent),
+            &env.identity_id,
+            body("hijack attempt"),
+        )
+        .await
+        .expect_err("cross-agent edit must be denied by policy");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            err.1 .0["error"], "Access denied",
+            "Cedar decision, not resolution error"
+        );
+        let asset = env
+            .state
+            .pdt
+            .for_instance(Some(&env.agent))
+            .get_asset(&env.identity_id, None)
+            .await
+            .unwrap();
+        assert_eq!(asset.content, OLD, "denied write must not land");
+    }
+
+    /// HARD CONSTRAINT (owner ruling): owner-scope identities stay outside
+    /// agent write scope — excluded BY CONSTRUCTION. An agent's groups
+    /// contain only its own mem-*; owner identities either carry no
+    /// admin_group (unmatchable) or a foreign owner group.
+    #[tokio::test]
+    async fn owner_stamped_identities_outside_agent_write_scope() {
+        let env = test_env().await;
+
+        // Case A: identity with NO admin_group (e.g. pre-Phase-1 charter) —
+        // `resource has admin_group` is false, scoped permit can't match.
+        let err = call(
+            &env,
+            &user_with("agent", &["mem-agentown"]),
+            Some(&env.agent),
+            &env.identity_id,
+            body("still denied"),
+        )
+        .await
+        .expect_err("unstamped identity must deny agents");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1 .0["error"], "Access denied");
+
+        // Case B: identity stamped with a FOREIGN owner group.
+        let owner_asset = env
+            .state
+            .pdt
+            .for_instance(Some(&env.agent))
+            .create_asset(
+                crate::pdt::CreateAssetRequest {
+                    title: "Identity: Owner-scope".to_string(),
+                    content: Some(OLD.to_string()),
+                    tags: Some(vec![crate::pdt::CreateTagRequest {
+                        category: "type".to_string(),
+                        value: "agent-identity".to_string(),
+                    }]),
+                    auth_context: None,
+                },
+                None,
+            )
+            .await
+            .expect("owner identity seeded");
+        let http = reqwest::Client::new();
+        let resp = http
+            .put(format!("{}/api/assets/{}", env.base, owner_asset.id))
+            .header("X-Instance-Id", &env.agent)
+            .json(&serde_json::json!({ "metadata": { "admin_group": "farzan-owner-scope" } }))
+            .send()
+            .await
+            .expect("owner stamp");
+        assert!(resp.status().is_success());
+
+        let err = call(
+            &env,
+            &user_with("agent", &["mem-agentown"]),
+            Some(&env.agent),
+            &owner_asset.id,
+            body("hijack"),
+        )
+        .await
+        .expect_err("foreign admin_group must deny agents");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1 .0["error"], "Access denied");
     }
 
     /// Empty content = explicit wipe: allowed, stored empty. The entity
@@ -1879,5 +1977,4 @@ mod identity_content_tests {
         assert_eq!(resp.0, StatusCode::CREATED);
         assert_eq!(resp.1 .0["content"], NEW);
     }
-
 }

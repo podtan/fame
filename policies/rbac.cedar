@@ -42,7 +42,11 @@ permit (
 )
 when { principal has role && principal.role == "admin" };
 
-// Agent role — can create and view memories, view and edit own identity
+// Agent role — can create and view memories, bootstrap-create identities,
+// view identities, and edit ONLY its own identity (v0.3.5: edit is
+// resource-scoped — the identity's admin_group, stamped mem-<agent> at
+// create by tocpi v0.6.3, must be in the caller's groups; the cross-agent
+// edit deny is now policy, not accident).
 permit (
     principal,
     action in [
@@ -56,12 +60,24 @@ permit (
         Action::"ViewProceduralMemory",
         Action::"EditProceduralMemory",
         Action::"ViewAgentIdentity",
-        Action::"EditAgentIdentity",
         Action::"CreateAgentIdentity",
     ],
     resource
 )
 when { principal has role && principal.role == "agent" };
+
+permit (
+    principal,
+    action == Action::"EditAgentIdentity",
+    resource
+)
+when {
+    principal has role
+    && principal.role == "agent"
+    && principal has groups
+    && resource has admin_group
+    && principal.groups.contains(resource.admin_group)
+};
 
 // Service role — tocpi control-plane bootstrap: may create, view, and
 // update agent identities on behalf of the platform (charter provisioning).
