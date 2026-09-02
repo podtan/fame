@@ -1376,6 +1376,8 @@ mod identity_content_tests {
     // - TAG objects carry "id" + "category" + "value" (fame PdtTag requires id)
     // - /api/search returns { "data": [ ... ] }
     // - PUT merges partial JSON (content/title/metadata)
+    // - POST persists auth_context verbatim, else AuthContext::default() —
+    //   real repos: request.auth_context.or_else(|| Some(default)) (v0.3.7)
 
     #[derive(Default)]
     struct MockDb {
@@ -1423,12 +1425,29 @@ mod identity_content_tests {
                         }
                     }
                     let _ = headers; // instance routing is process-global in the mock
+                    // Wire parity (v0.3.7 CI lesson): real PDT persists
+                    // auth_context at creation — request value verbatim, else
+                    // AuthContext::default() (sqlite_asset_repository.rs:112,
+                    // mongo_asset_repository.rs:53). Generic PUT below still
+                    // drops it: real UpdateAssetRequest has no such field.
+                    let auth_context = body
+                        .get("auth_context")
+                        .cloned()
+                        .filter(|v| v.is_object())
+                        .unwrap_or_else(|| {
+                            serde_json::json!({
+                                "visibility": "",
+                                "owner_groups": [],
+                                "confidentiality": ""
+                            })
+                        });
                     let asset = serde_json::json!({
                         "_id": id,
                         "title": body.get("title").cloned().unwrap_or(serde_json::Value::Null),
                         "content": body.get("content").cloned().unwrap_or(serde_json::Value::String(String::new())),
                         "tags": tags,
                         "metadata": {},
+                        "auth_context": auth_context,
                         "created_at": "2026-08-29T00:00:00Z",
                         "updated_at": "2026-08-29T00:00:00Z"
                     });
