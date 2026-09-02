@@ -632,7 +632,28 @@ async fn create_entity_inner(
     // (every memory needed a hand-patch until 2026-08-29). Groups are
     // stamped in the exact claim form so PDT's owner_groups matching sees
     // identical strings on both sides.
+    //
+    // v0.3.6 (task 3ff56a20, Phase-2 candidate GO): AGENT IDENTITIES stamp
+    // with the IDENTITY'S admin_group forms — not the creator's group. The
+    // creator's band made charters readable by the creator + admins only;
+    // the owning agent stayed blind to its own charter (live: saman 403
+    // View on b8496c07, 2026-09-02). tocpi v0.6.3+ sends admin_group in
+    // claim form (mem-<agent>@<domain>); it is stamped verbatim. No retro
+    // re-banding — owner-scope identities keep their bands (creator
+    // boundary, owner ruling).
+    let identity_admin_group = if slug == "agent-identity" {
+        workspace_admins.0.clone()
+    } else {
+        None
+    };
     let auth_context = parent_auth_ctx.or_else(|| {
+        if slug == "agent-identity" {
+            return Some(AuthContext {
+                visibility: "team".to_string(),
+                owner_groups: identity_admin_group.map(|g| vec![g]).unwrap_or_default(),
+                confidentiality: String::new(),
+            });
+        }
         pick_owner_group(&user_groups(user)).map(|group| AuthContext {
             visibility: "team".to_string(),
             owner_groups: vec![group],
@@ -1785,6 +1806,80 @@ mod identity_content_tests {
         .await
         .expect("agent may edit own identity — admin_group matches its group");
         assert_eq!(resp.0["content"], "self-written charter");
+    }
+
+    /// GUARD (v0.3.6, task 3ff56a20): identity create birth-stamps
+    /// auth_context from the workspace_admins header — exact claim forms,
+    /// team visibility. Regression for the View-deny class (saman 403 on
+    /// own charter, 2026-09-02).
+    #[tokio::test]
+    async fn identity_create_birth_stamps_auth_context() {
+        let env = test_env().await;
+        let resp = create_entity_inner(
+            &env.state,
+            &user_with("service", &[]),
+            None,
+            Some(&env.agent),
+            "agent-identity",
+            serde_json::json!({"title": "Fresh Charter", "content": NEW}),
+            WorkspaceAdmins(Some("mem-fresh@idp.tanbal.ir".to_string())),
+        )
+        .await
+        .expect("bootstrap create");
+        assert_eq!(resp.0, StatusCode::CREATED);
+
+        // The stamp is ON THE ASSET at birth — zero hand-stamps.
+        let id = resp.1 .0["id"].as_str().expect("entity id");
+        let asset = env
+            .state
+            .pdt
+            .for_instance(Some(&env.agent))
+            .get_asset(id, None)
+            .await
+            .expect("created identity readable");
+        let ac = asset.auth_context.expect("auth_context present at birth");
+        assert_eq!(ac.visibility, "team");
+        assert_eq!(ac.owner_groups, vec!["mem-fresh@idp.tanbal.ir".to_string()]);
+        assert_eq!(ac.confidentiality, "");
+    }
+
+    /// GUARD (v0.3.6 behavioral): new-agent self-PATCH with ZERO
+    /// hand-stamps — create (birth-stamped) → agent edits its own charter
+    /// through the scoped permit. The create→edit chain closes.
+    #[tokio::test]
+    async fn new_agent_self_patch_after_birth_zero_hand_stamps() {
+        let env = test_env().await;
+        let resp = create_entity_inner(
+            &env.state,
+            &user_with("service", &[]),
+            None,
+            Some(&env.agent),
+            "agent-identity",
+            serde_json::json!({"title": "Fresh Charter", "content": OLD}),
+            WorkspaceAdmins(Some("mem-fresh@idp.tanbal.ir".to_string())),
+        )
+        .await
+        .expect("bootstrap create");
+        let id = resp.1 .0["id"].as_str().expect("entity id").to_string();
+
+        // The owning agent (its mem-* group matches the birth stamp) edits
+        // its own charter — no hand-stamps anywhere in between.
+        let patched = update_identity_content_inner(
+            &env.state,
+            &user_with("agent", &["mem-fresh@idp.tanbal.ir"]),
+            None,
+            Some(&env.agent),
+            "agent-identity",
+            &id,
+            serde_json::json!({ "content": NEW }),
+        )
+        .await
+        .expect("self-PATCH allowed on birth-stamped identity");
+        assert_eq!(patched.0["content"], NEW);
+        assert_eq!(patched.0["content_hash"]["new"], {
+            use sha2::Digest;
+            format!("sha256:{:x}", sha2::Sha256::digest(NEW.as_bytes()))
+        });
     }
 
     /// GUARD 1 (Phase 1): cross-agent PATCH → DENY VIA CEDAR — the policy
