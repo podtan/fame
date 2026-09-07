@@ -16,7 +16,7 @@ mod models;
 mod openapi_gen;
 mod pdt;
 
-use axum::{routing::get, Router};
+use axum::{routing::get, Json, Router};
 use pep::oidc_resource_server::ResourceServerClient;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -146,6 +146,13 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn health() -> &'static str {
-    "OK"
+/// Health check — self-reporting version (Ask-2, Paydar 2026-09-07): every
+/// post-deploy verification reads the version from the wire instead of
+/// mtime-archaeology on the binary. Body changed "OK" → JSON; status stays 200.
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "fame",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }

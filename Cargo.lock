@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "fame"
-version = "0.3.7"
+version = "0.3.9"
 dependencies = [
  "anyhow",
  "axum",
