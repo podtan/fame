@@ -99,19 +99,26 @@ pub struct AuthenticatedUser {
 impl AuthenticatedUser {
     /// Build a `JwtClaims` suitable for Cedar evaluation from this user.
     ///
-    /// Propagates `role` and `groups` from the original JWT `extra` map.
-    /// When `claims_extra` is `None` (e.g. unit-test construction), falls back
-    /// to `role = "viewer"` — a safe, least-privilege default.
+    /// Propagates `role` and `groups` from the original JWT `extra` map
+    /// verbatim. There is deliberately NO default role on this path:
+    /// a principal without a role claim stays role-less and Cedar's
+    /// `principal has role` permits default-deny it — an HONEST authz
+    /// denial (403). b82a1925: the previous silent `role="viewer"`
+    /// insertion is what converted an unenriched principal into a lying
+    /// 403; enrichment failure now 401s in the middleware before any
+    /// principal is constructed, so this function never sees that case.
+    ///
+    /// The `None` arm (claims_extra absent) is reachable only from unit-test
+    /// construction — the request-path extractor always supplies `Some` —
+    /// and keeps its least-privilege test default.
     pub fn to_cedar_claims(&self) -> JwtClaims {
         let mut extra = std::collections::HashMap::new();
 
         match &self.claims_extra {
             Some(orig) => {
-                // Propagate role if present
+                // Propagate role if present — verbatim, never defaulted.
                 if let Some(role) = orig.get("role") {
                     extra.insert("role".to_string(), role.clone());
-                } else {
-                    extra.insert("role".to_string(), Value::String("viewer".to_string()));
                 }
                 // Propagate groups if present
                 if let Some(groups) = orig.get("groups") {

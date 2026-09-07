@@ -124,6 +124,15 @@ where
                     );
                     // Adaptive claims enrichment: fill missing groups/role from OIDC userinfo
                     // This makes NGHR work with Kanidm (no groups in AT) and Keycloak/Auth0 (groups in AT)
+                    //
+                    // b82a1925 guard-1 (401-fail-loud): enrichment failure means the
+                    // token cannot be resolved to a principal with authorization
+                    // attributes. That is an AUTHENTICATION failure → 401 with an
+                    // explicit retry signal, journaled at WARN. The previous behavior
+                    // logged it as "non-fatal" and inserted role-less claims, which
+                    // the extractor then defaulted to role="viewer" → Cedar
+                    // default-deny → a silent 403 that lied about authz and masked
+                    // recurring token age-out windows.
                     if let Err(e) = client
                         .enrich_claims_with_userinfo(
                             &mut claims,
@@ -133,7 +142,12 @@ where
                         )
                         .await
                     {
-                        tracing::warn!("Userinfo enrichment failed (non-fatal): {}", e);
+                        tracing::warn!(
+                            "Auth: userinfo enrichment FAILED — answering 401 with retry \
+                             signal (default-role fallback removed, request fails loudly): {}",
+                            e
+                        );
+                        return Ok(AuthError::EnrichmentFailed(format!("{}", e)).into_response());
                     }
                     req.extensions_mut().insert(claims);
                     inner.call(req).await
