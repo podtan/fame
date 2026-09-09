@@ -753,18 +753,18 @@ mod auth_context_stamp_tests {
     fn agent_mem_group_wins() {
         let groups = vec![
             "pdt-api-agents".to_string(),
-            "mem-e69605b1@idp.tanbal.ir".to_string(),
+            "mem-e69605b1@idp.example.com".to_string(),
         ];
         assert_eq!(
             pick_owner_group(&groups).as_deref(),
-            Some("mem-e69605b1@idp.tanbal.ir")
+            Some("mem-e69605b1@idp.example.com")
         );
     }
 
     #[test]
     fn human_ws_admins_group_when_no_mem_group() {
         let groups = vec![
-            "pdt-api-users@idp.tanbal.ir".to_string(),
+            "pdt-api-users@idp.example.com".to_string(),
             "ws-9f2e7d01-4c5b-6a7d-8e9f-001122334455-admins".to_string(),
         ];
         assert_eq!(
@@ -775,17 +775,17 @@ mod auth_context_stamp_tests {
 
     #[test]
     fn spn_form_ws_admins_still_matches() {
-        let groups = vec!["ws-abc123-admins@idp.tanbal.ir".to_string()];
+        let groups = vec!["ws-abc123-admins@idp.example.com".to_string()];
         assert_eq!(
             pick_owner_group(&groups).as_deref(),
-            Some("ws-abc123-admins@idp.tanbal.ir")
+            Some("ws-abc123-admins@idp.example.com")
         );
     }
 
     #[test]
     fn plain_roles_never_own_memories() {
         let groups = vec![
-            "pdt-api-users@idp.tanbal.ir".to_string(),
+            "pdt-api-users@idp.example.com".to_string(),
             "pdt-api-agents".to_string(),
         ];
         assert_eq!(pick_owner_group(&groups), None);
@@ -1250,6 +1250,9 @@ mod identity_content_tests {
     //!   from a PREBUILT sibling binary (`../pdt/target/debug/pdt`, or
     //!   `FAME_IT_PDT_BIN`). Full tenant routing — nested-DB provisioning,
     //!   X-Instance-Id isolation, real wire.
+    //!   The binary must be built with `--features sqlite-backend`: a
+    //!   default-features build ignores `PDT_DB_BACKEND=sqlite` (the arm is
+    //!   cfg-gated), falls back to mongodb, and never becomes healthy.
     //! - **mock-pdt** (always available, CI default): an in-process axum
     //!   server speaking PDT's wire format (tag objects carry ids, assets
     //!   use `_id`) — keeps the gate green without a sibling checkout.
@@ -1841,7 +1844,7 @@ mod identity_content_tests {
             Some(&env.agent),
             "agent-identity",
             serde_json::json!({"title": "Fresh Charter", "content": NEW}),
-            WorkspaceAdmins(Some("mem-fresh@idp.tanbal.ir".to_string())),
+            WorkspaceAdmins(Some("mem-fresh@idp.example.com".to_string())),
         )
         .await
         .expect("bootstrap create");
@@ -1858,7 +1861,7 @@ mod identity_content_tests {
             .expect("created identity readable");
         let ac = asset.auth_context.expect("auth_context present at birth");
         assert_eq!(ac.visibility, "team");
-        assert_eq!(ac.owner_groups, vec!["mem-fresh@idp.tanbal.ir".to_string()]);
+        assert_eq!(ac.owner_groups, vec!["mem-fresh@idp.example.com".to_string()]);
         assert_eq!(ac.confidentiality, "");
     }
 
@@ -1875,7 +1878,7 @@ mod identity_content_tests {
             Some(&env.agent),
             "agent-identity",
             serde_json::json!({"title": "Fresh Charter", "content": OLD}),
-            WorkspaceAdmins(Some("mem-fresh@idp.tanbal.ir".to_string())),
+            WorkspaceAdmins(Some("mem-fresh@idp.example.com".to_string())),
         )
         .await
         .expect("bootstrap create");
@@ -1885,7 +1888,7 @@ mod identity_content_tests {
         // its own charter — no hand-stamps anywhere in between.
         let patched = update_identity_content_inner(
             &env.state,
-            &user_with("agent", &["mem-fresh@idp.tanbal.ir"]),
+            &user_with("agent", &["mem-fresh@idp.example.com"]),
             None,
             Some(&env.agent),
             "agent-identity",

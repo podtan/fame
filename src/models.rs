@@ -9,7 +9,7 @@ use utoipa::OpenApi;
 #[openapi(
     info(
         title = "Fame — Facade for Agent Memory",
-        description = "Memory facade over PDT. Provides semantic, episodic, and procedural memory per agent.\n\nAgent identity is passed via X-Instance-Id header (injected by Aether). The agent never sees or passes agent_id — the URL path to Fame (https://fame.aether.tanbal.ir/{agent_id}/sse) tells Aether which agent to route to, and Aether injects X-Instance-Id.",
+        description = "Memory facade over PDT. Provides semantic, episodic, and procedural memory per agent.\n\nAgent identity is passed via X-Instance-Id header (injected by Aether). The agent never sees or passes agent_id — the URL path to Fame (https://fame.example.com/{agent_id}/sse) tells Aether which agent to route to, and Aether injects X-Instance-Id.",
         version = "0.1.0",
         contact(name = "Podtan Team"),
         license(name = "MIT OR Apache-2.0"),
