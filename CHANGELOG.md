@@ -5,6 +5,21 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2026-09-25
+
+### Fixed
+- Entity list endpoints no longer cap at 100 records (NGHR issue b3209637):
+  the tag-search page size is raised to 1000. v0.3.9's fixed window silently
+  evicted the oldest records from every list while they stayed GET-able by
+  id, and `total` (the returned page count) under-counted — list-based
+  consumers could miscount and re-create evicted records.
+- This is an interim mitigation, not a complete fix: the window still exists
+  in principle (stores past 1000 matching records would truncate again).
+  Proper remedy — true-total semantics + cursor pagination — tracked as a
+  follow-up.
+- Test-code formatting drift fixed (`cargo fmt` clean on the release tree;
+  no behavior change).
+
 ## [0.3.9] - 2026-09-09
 
 ### Added

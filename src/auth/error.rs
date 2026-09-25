@@ -119,18 +119,13 @@ mod tests {
 
         let body = resp.into_body();
         // Body must be the machine-readable JSON (not the Display string).
-        let bytes = futures::executor::block_on(axum::body::to_bytes(
-            axum::body::Body::new(body),
-            4096,
-        ))
-        .unwrap();
+        let bytes =
+            futures::executor::block_on(axum::body::to_bytes(axum::body::Body::new(body), 4096))
+                .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON body");
         assert_eq!(v["error"], "token_expired");
         assert_eq!(v["retryable"], true);
-        assert!(v["detail"]
-            .as_str()
-            .unwrap()
-            .contains("invalid_token"));
+        assert!(v["detail"].as_str().unwrap().contains("invalid_token"));
     }
 
     /// 403 must NEVER appear on the enrichment-failure path — that is the

@@ -198,6 +198,12 @@ impl PdtClient {
     }
 
     /// Search by tag with instance routing.
+    ///
+    /// Page size is 1000 (raised from 100, issue b3209637): the old cap made
+    /// list endpoints a bounded window — records past the cap silently left
+    /// every list while staying GET-able by id, and `total` (reported as
+    /// entities.len() downstream) under-counted. 1000 is headroom, not a
+    /// fix: the proper remedy is true-total semantics + cursor pagination.
     pub async fn search_by_tag_instance(
         &self,
         category: &str,
@@ -206,7 +212,7 @@ impl PdtClient {
         instance_id: Option<&str>,
     ) -> Result<Vec<PdtSearchResult>> {
         let url = format!(
-            "{}/api/search?tag={}:{}&limit=100",
+            "{}/api/search?tag={}:{}&limit=1000",
             self.base_url, category, value
         );
         let resp = self

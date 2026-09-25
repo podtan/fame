@@ -1428,11 +1428,11 @@ mod identity_content_tests {
                         }
                     }
                     let _ = headers; // instance routing is process-global in the mock
-                    // Wire parity (v0.3.7 CI lesson): real PDT persists
-                    // auth_context at creation — request value verbatim, else
-                    // AuthContext::default() (sqlite_asset_repository.rs:112,
-                    // mongo_asset_repository.rs:53). Generic PUT below still
-                    // drops it: real UpdateAssetRequest has no such field.
+                                     // Wire parity (v0.3.7 CI lesson): real PDT persists
+                                     // auth_context at creation — request value verbatim, else
+                                     // AuthContext::default() (sqlite_asset_repository.rs:112,
+                                     // mongo_asset_repository.rs:53). Generic PUT below still
+                                     // drops it: real UpdateAssetRequest has no such field.
                     let auth_context = body
                         .get("auth_context")
                         .cloned()
@@ -1861,7 +1861,10 @@ mod identity_content_tests {
             .expect("created identity readable");
         let ac = asset.auth_context.expect("auth_context present at birth");
         assert_eq!(ac.visibility, "team");
-        assert_eq!(ac.owner_groups, vec!["mem-fresh@idp.example.com".to_string()]);
+        assert_eq!(
+            ac.owner_groups,
+            vec!["mem-fresh@idp.example.com".to_string()]
+        );
         assert_eq!(ac.confidentiality, "");
     }
 
