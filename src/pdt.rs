@@ -11,26 +11,59 @@ pub struct PdtClient {
     base_url: String,
 }
 
+/// Deserialize `null` as `Default::default()`.
+///
+/// `#[serde(default)]` alone covers a MISSING field but still rejects an
+/// EXPLICIT `null`. PDT is the authority on asset shape, but storage tiers
+/// (sqlite vs mongo migration paths) and older writers can emit nulls for
+/// fields that are structurally optional (timestamps on untouched rows,
+/// metadata on bare creates, tag ids from bulk imports). Fame must be able
+/// to read ANY asset PDT can serve — the strict-decode tier once 404'd a
+/// live, correctly-banded asset because its payload carried a null
+/// (issue 0473c444: GET 404 + status-update 500 with "error decoding
+/// response body" while the sqlite row was verifiably intact).
+///
+/// Pair with `#[serde(default)]`: default covers absence, this covers null.
+fn null_as_default<'de, T, D>(d: D) -> Result<T, D::Error>
+where
+    T: serde::Deserialize<'de> + Default,
+    D: serde::Deserializer<'de>,
+{
+    let v: Option<T> = Option::deserialize(d)?;
+    Ok(v.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PdtTag {
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub id: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub category: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub value: String,
     /// Added by user ID (returned by PDT, not used by NGHR)
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub added_by: String,
     /// Timestamp when tag was added (returned by PDT, not used by NGHR)
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub added_at: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthContext {
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub visibility: String,
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub owner_groups: Vec<String>,
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub confidentiality: String,
 }
 
@@ -38,20 +71,31 @@ pub struct AuthContext {
 pub struct PdtAsset {
     #[serde(rename = "_id")]
     pub id: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub title: String,
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub content: String,
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub tags: Vec<PdtTag>,
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub metadata: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub created_at: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub updated_at: String,
     /// Creator user ID (returned by PDT, not used by NGHR)
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub created_by: String,
     /// Last updater user ID (returned by PDT, not used by NGHR)
     #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub updated_by: String,
     /// Soft-delete timestamp (returned by PDT, not used by NGHR)
     #[serde(default)]
@@ -59,6 +103,21 @@ pub struct PdtAsset {
     /// Cedar authorization context (visibility, owner_groups, confidentiality)
     #[serde(default)]
     pub auth_context: Option<AuthContext>,
+}
+
+/// Outcome of an asset fetch, distinguishing TRUE absence (PDT answered
+/// 404) from transport/decode failures. Callers must never report a decode
+/// failure as "not found" — that masks live data behind a bug (issue
+/// 0473c444: a live, correctly-banded procedural memory read as 404 for
+/// days because its payload tripped the strict decode, and the get handler
+/// mapped every fetch error to NOT_FOUND).
+#[derive(Debug)]
+pub enum AssetFetch {
+    Found(PdtAsset),
+    /// PDT answered 404 for this id — genuinely absent (or wrong instance).
+    NotFound,
+    /// Transport or decode failure — fame-side or PDT-side fault, NOT absence.
+    Failed(anyhow::Error),
 }
 
 /// Compact tag summary from search results (no id, added_by, added_at)
@@ -259,6 +318,32 @@ impl PdtClient {
         self.get_asset_instance(id, token, None).await
     }
 
+    /// Fetch an asset with absence/failure discrimination and loud failure
+    /// logging. `get_asset` keeps the anyhow signature for existing callers;
+    /// new handler paths that must distinguish "absent" from "broken" use
+    /// this (issue 0473c444).
+    pub async fn fetch_asset(
+        &self,
+        id: &str,
+        token: Option<&str>,
+        instance_id: Option<&str>,
+    ) -> AssetFetch {
+        match self.get_asset_instance(id, token, instance_id).await {
+            Ok(asset) => AssetFetch::Found(asset),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.starts_with("PDT asset not found") {
+                    AssetFetch::NotFound
+                } else {
+                    // Fail LOUD at the choke point: a 500 with no journal
+                    // line is its own bug (issue 0473c444 secondary finding).
+                    tracing::error!(asset_id = %id, "PDT asset fetch failed: {msg}");
+                    AssetFetch::Failed(e)
+                }
+            }
+        }
+    }
+
     /// Get asset with instance routing.
     pub async fn get_asset_instance(
         &self,
@@ -274,6 +359,9 @@ impl PdtClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                anyhow::bail!("PDT asset not found (404): {id}");
+            }
             anyhow::bail!("PDT get_asset failed ({}): {}", status, body);
         }
         Ok(resp.json::<PdtAsset>().await?)
@@ -556,6 +644,13 @@ impl<'a> InstancePdtClient<'a> {
             .await
     }
 
+    /// Absence/failure-discriminating fetch (see [`PdtClient::fetch_asset`]).
+    pub async fn fetch_asset(&self, id: &str, token: Option<&str>) -> AssetFetch {
+        self.client
+            .fetch_asset(id, token, self.instance_id.as_deref())
+            .await
+    }
+
     pub async fn create_asset(
         &self,
         req: CreateAssetRequest,
@@ -776,5 +871,67 @@ impl<'a> InstancePdtClient<'a> {
 
     pub fn http_client(&self) -> &Client {
         &self.client.client
+    }
+}
+
+#[cfg(test)]
+mod pdt_asset_decode_tolerance {
+    //! Issue 0473c444: fame must decode ANY asset payload PDT can serve.
+    //! Storage tiers (sqlite vs mongo) and older writers can emit nulls for
+    /// structurally-optional fields; the strict decode once turned a live,
+    /// correctly-banded asset into a 404. These pin the tolerant contract:
+    /// null/missing optional fields decode to defaults; a payload without
+    /// _id still fails (that is a genuinely malformed asset).
+    use super::PdtAsset;
+
+    fn base() -> String {
+        r#"{"_id":"x","title":"t","content":"c","tags":[],"metadata":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","created_by":"u","updated_by":"u","auth_context":{"visibility":"team","owner_groups":["g"],"confidentiality":""}}"#.to_string()
+    }
+
+    #[test]
+    fn tolerant_shapes_decode() {
+        let cases: Vec<(&str, String)> = vec![
+            ("baseline", base()),
+            ("created_at missing", base().replace(r#","created_at":"2026-01-01T00:00:00Z""#, "")),
+            ("created_at null", base().replace(r#""created_at":"2026-01-01T00:00:00Z""#, r#""created_at":null"#)),
+            ("updated_at missing", base().replace(r#","updated_at":"2026-01-01T00:00:00Z""#, "")),
+            ("updated_at null", base().replace(r#""updated_at":"2026-01-01T00:00:00Z""#, r#""updated_at":null"#)),
+            ("metadata null", base().replace(r#""metadata":{}"#, r#""metadata":null"#)),
+            ("metadata missing", base().replace(r#","metadata":{}"#, "")),
+            ("tags null", base().replace(r#""tags":[]"#, r#""tags":null"#)),
+            ("tag value null", base().replace(r#""tags":[]"#, r#""tags":[{"id":"t1","category":"status","value":null}]"#)),
+            ("tag id missing", base().replace(r#""tags":[]"#, r#""tags":[{"category":"status","value":"draft"}]"#)),
+            ("auth_context missing", base().replace(r#","auth_context":{"visibility":"team","owner_groups":["g"],"confidentiality":""}"#, "")),
+            ("auth_context null", base().replace(r#","auth_context":{"visibility":"team","owner_groups":["g"],"confidentiality":""}"#, r#","auth_context":null"#)),
+            ("auth owner_groups null", base().replace(r#""owner_groups":["g"]"#, r#""owner_groups":null"#)),
+            ("auth visibility null", base().replace(r#""visibility":"team""#, r#""visibility":null"#)),
+            ("title null", base().replace(r#""title":"t""#, r#""title":null"#)),
+            ("unicode star emdash", base().replace("\"c\"", "\"\u{2605} \u{2014} dash\"")),
+            ("auth_context extra field", base().replace(r#""confidentiality":""}"#, r#""confidentiality":"","unknown":123}"#)),
+        ];
+        for (name, payload) in &cases {
+            let r: Result<PdtAsset, _> = serde_json::from_str(payload);
+            assert!(r.is_ok(), "shape `{}` must decode: {:?}", name, r.err());
+        }
+    }
+
+    #[test]
+    fn genuinely_malformed_still_fails() {
+        // Missing _id: a genuinely malformed asset — decode must refuse,
+        // and the handler path surfaces it as a LOUD 500, never a 404.
+        let payload = base().replace(r#""_id":"x","#, "");
+        let r: Result<PdtAsset, _> = serde_json::from_str(&payload);
+        assert!(r.is_err(), "missing _id must not decode");
+
+        // auth_context of the WRONG TYPE (string where object belongs):
+        // deliberately NOT tolerated. Swallowing it into None would silently
+        // strip the asset's banding — the born-invisible class. A malformed
+        // band fails loud (500 + journal line) instead.
+        let payload = base().replace(
+            r#"{"visibility":"team","owner_groups":["g"],"confidentiality":""}"#,
+            "\"weird\"",
+        );
+        let r: Result<PdtAsset, _> = serde_json::from_str(&payload);
+        assert!(r.is_err(), "wrong-typed auth_context must not decode");
     }
 }

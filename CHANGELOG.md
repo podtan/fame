@@ -5,6 +5,27 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] - 2026-10-04
+
+### Fixed
+- A live, correctly-banded memory could read as **404** (GET) and **500
+  "error decoding response body"** (status update) while its storage row
+  was verifiably intact (NGHR issue 0473c444). Root cause: fame's strict
+  `PdtAsset` decode rejected payloads whose optional fields arrived null
+  (timestamps, metadata, tag ids, auth sub-fields — the sqlite vs mongo
+  storage tiers and older writers differ here), and the GET handler mapped
+  EVERY fetch error — including decode failures — to NOT_FOUND, masking
+  live data behind a bug.
+- `PdtAsset`/`PdtTag`/`AuthContext` decoding is now null-tolerant: null or
+  missing optional fields decode to defaults, matching the list tier's
+  tolerance (envelope fidelity — the same asset reads the same through
+  every surface). Genuinely malformed payloads (missing `_id`, wrong-typed
+  `auth_context`) still fail — loudly.
+- GET and identity-content paths now distinguish true absence (PDT 404 →
+  fame 404) from transport/decode failure (fame 500), and every fetch or
+  status-update failure logs loudly at the choke point. The fail-silent
+  500 (no journal line) is dead.
+
 ## [0.3.10] - 2026-09-25
 
 ### Fixed

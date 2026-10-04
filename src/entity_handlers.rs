@@ -21,7 +21,7 @@ use tracing::info;
 use crate::auth::{AuthenticatedUser, ForwardedToken, InstanceContext, WorkspaceAdmins};
 use crate::entity_config::{slug_to_cedar_type, EntityConfig};
 use crate::pdt::{
-    AuthContext, CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset,
+    AssetFetch, AuthContext, CreateAssetRequest, CreateRelationRequest, CreateTagRequest, PdtAsset,
     PdtSearchResult,
 };
 use crate::AppState;
@@ -391,10 +391,25 @@ async fn get_entity_inner(
         )
     })?;
 
-    let asset = pdt
-        .get_asset(id, token)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e.to_string()}))))?;
+    let asset = match pdt.fetch_asset(id, token).await {
+        AssetFetch::Found(asset) => asset,
+        AssetFetch::NotFound => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("Asset {} not found", id)})),
+            ))
+        }
+        // A transport/decode failure is NOT absence — never mask it as 404
+        // (issue 0473c444: a live asset read as 404 for days because its
+        // payload tripped the decode; the failure is already logged loudly
+        // at the fetch choke point).
+        AssetFetch::Failed(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            ))
+        }
+    };
 
     // Type guard: an asset requested via /semantic-memory/{id} must actually
     // BE a semantic memory. Without this, any asset ID from the same
@@ -882,6 +897,13 @@ async fn update_entity_status_inner(
         .update_asset_tag(id, "status", new_status, token)
         .await
         .map_err(|e| {
+            // Fail loud: a 500 with no journal line is its own bug
+            // (issue 0473c444 secondary finding).
+            tracing::error!(
+                slug = %slug,
+                asset_id = %id,
+                "status update failed: {e}"
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": e.to_string()})),
@@ -938,15 +960,24 @@ async fn update_identity_content_inner(
         )
     })?;
 
-    // Loud 404 BEFORE authorization: an unknown id is a caller error, not an
-    // access-control outcome, and the Cedar check needs the stored
-    // admin_group from the asset anyway.
-    let asset = pdt.get_asset(id, token).await.map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": format!("Agent identity not found: {} ({})", id, e)})),
-        )
-    })?;
+    // Loud 404 BEFORE authorization — but ONLY for true absence: a transport
+    // or decode failure is not "not found" (issue 0473c444 lesson; the
+    // failure is logged loudly at the fetch choke point).
+    let asset = match pdt.fetch_asset(id, token).await {
+        AssetFetch::Found(asset) => asset,
+        AssetFetch::NotFound => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("Agent identity not found: {id}")})),
+            ))
+        }
+        AssetFetch::Failed(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            ))
+        }
+    };
 
     // Cedar authorization check — same slug-derived resource type and
     // workspace scoping as the status update: the anchor comes from the
@@ -1403,7 +1434,7 @@ mod identity_content_tests {
         })
     }
 
-    async fn spawn_mock_pdt() -> String {
+    pub(super) async fn spawn_mock_pdt() -> String {
         let state = std::sync::Arc::new(MockState {
             db: Mutex::new(MockDb::default()),
         });
@@ -1467,6 +1498,35 @@ mod identity_content_tests {
             let st = st_get.clone();
             async move {
                 use axum::response::IntoResponse;
+                // Fixtures for the issue-0473c444 decode-tolerance contract:
+                // "degenerate-asset" serves a structurally valid asset whose
+                // optional fields are null (the class that once 404'd a live
+                // memory); "garbage-asset" serves unparseable JSON (transport
+                // noise class — must surface as LOUD failure, never 404).
+                if id == "degenerate-asset" {
+                    let body = serde_json::json!({
+                        "_id": id,
+                        "title": "Degenerate",
+                        "content": "payload with nulls",
+                        "tags": [
+                            {"id": null, "category": "type", "value": "agent-memory", "added_by": null, "added_at": null},
+                            {"id": "tag-2", "category": "memory-type", "value": "procedural"}
+                        ],
+                        "metadata": null,
+                        "created_at": null,
+                        "updated_at": null,
+                        "auth_context": {"visibility": "team", "owner_groups": null, "confidentiality": null}
+                    });
+                    return (axum::http::StatusCode::OK, axum::Json(body)).into_response();
+                }
+                if id == "garbage-asset" {
+                    return (
+                        axum::http::StatusCode::OK,
+                        [("content-type", "application/json")],
+                        "{{{not json",
+                    )
+                        .into_response();
+                }
                 let db = st.db.lock().unwrap();
                 match db.assets.iter().find(|a| a["_id"] == id) {
                     Some(a) => axum::Json(a.clone()).into_response(),
@@ -2096,5 +2156,87 @@ mod identity_content_tests {
         .expect("service principal may bootstrap identity");
         assert_eq!(resp.0, StatusCode::CREATED);
         assert_eq!(resp.1 .0["content"], NEW);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — get_entity_inner absence/failure discrimination (issue 0473c444)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod get_discrimination_tests {
+    use super::*;
+    use crate::pdt::PdtClient;
+    use std::sync::Arc;
+
+    /// Minimal AppState over the mock PDT (same tier as identity tests).
+    /// No authorizer: get_entity_inner does its type-guard without Cedar,
+    /// and the fixtures carry valid memory tags.
+    async fn state_against(mock_base: &str) -> AppState {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("entities");
+        let entity_configs: Vec<_> =
+            crate::entity_config::load_entity_configs(dir.to_str().unwrap())
+                .into_iter()
+                .map(Arc::new)
+                .collect();
+        let config: crate::config::Config = toml::from_str(&format!(
+            "host = '127.0.0.1'\nport = 0\npdt_url = '{mock_base}'"
+        ))
+        .expect("minimal test config parses");
+        AppState {
+            config: Arc::new(config),
+            pdt: Arc::new(PdtClient::new(mock_base)),
+            authorizer: None,
+            entity_configs,
+        }
+    }
+
+    /// A structurally valid asset whose optional fields are null (the
+    /// 1db97da3 class) must READ BACK as the entity — never 404.
+    #[tokio::test]
+    async fn degenerate_payload_reads_as_entity_not_404() {
+        let base = super::identity_content_tests::spawn_mock_pdt().await;
+        let state = state_against(&base).await;
+        let result =
+            get_entity_inner(&state, None, None, "procedural-memory", "degenerate-asset").await;
+        match result {
+            Ok(Json(entity)) => {
+                assert_eq!(entity["id"], "degenerate-asset");
+                assert_eq!(entity["title"], "Degenerate");
+            }
+            Err((status, body)) => {
+                panic!("degenerate payload must decode, got {}: {}", status, body.0)
+            }
+        }
+    }
+
+    /// A true PDT 404 stays a 404 — absence must remain distinguishable.
+    #[tokio::test]
+    async fn true_absence_is_404() {
+        let base = super::identity_content_tests::spawn_mock_pdt().await;
+        let state = state_against(&base).await;
+        let result =
+            get_entity_inner(&state, None, None, "procedural-memory", "no-such-asset").await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => panic!("absent asset must not resolve"),
+        }
+    }
+
+    /// Transport/decode garbage is a LOUD 500, never a masked 404.
+    #[tokio::test]
+    async fn garbage_payload_is_500_not_404() {
+        let base = super::identity_content_tests::spawn_mock_pdt().await;
+        let state = state_against(&base).await;
+        let result =
+            get_entity_inner(&state, None, None, "procedural-memory", "garbage-asset").await;
+        match result {
+            Err((status, body)) => {
+                assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+                let msg = body.0["error"].as_str().unwrap_or_default();
+                assert!(!msg.is_empty(), "500 body must carry the failure reason");
+            }
+            Ok(_) => panic!("garbage payload must not resolve as an entity"),
+        }
     }
 }
