@@ -394,10 +394,19 @@ async fn get_entity_inner(
     let asset = match pdt.fetch_asset(id, token).await {
         AssetFetch::Found(asset) => asset,
         AssetFetch::NotFound => {
+            // Journal trail for absence: when a listed-but-unGETable record
+            // appears (issue 0473c444), the next investigator starts from a
+            // log line, not a mystery.
+            tracing::info!(
+                slug = %slug,
+                asset_id = %id,
+                instance = ?instance_id,
+                "entity GET: PDT reports asset absent in routed store"
+            );
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(json!({"error": format!("Asset {} not found", id)})),
-            ))
+            ));
         }
         // A transport/decode failure is NOT absence — never mask it as 404
         // (issue 0473c444: a live asset read as 404 for days because its
@@ -893,22 +902,25 @@ async fn update_entity_status_inner(
         }
     }
 
-    let asset = pdt
-        .update_asset_tag(id, "status", new_status, token)
-        .await
-        .map_err(|e| {
-            // Fail loud: a 500 with no journal line is its own bug
-            // (issue 0473c444 secondary finding).
-            tracing::error!(
-                slug = %slug,
-                asset_id = %id,
-                "status update failed: {e}"
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})),
-            )
-        })?;
+    let asset = match pdt.update_asset_tag(id, "status", new_status, token).await {
+        Ok(asset) => asset,
+        Err(e) => {
+            let msg = e.to_string();
+            // Absence stays a 404 (honest semantics); everything else is a
+            // loud 500 — never a silent envelope (issue 0473c444).
+            let status = if msg.starts_with("PDT asset not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                tracing::error!(
+                    slug = %slug,
+                    asset_id = %id,
+                    "status update failed: {msg}"
+                );
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return Err((status, Json(json!({"error": msg}))));
+        }
+    };
 
     let entity =
         map_asset_to_entity_with_relations(state, instance_id, &asset, &config, token).await;

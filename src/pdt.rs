@@ -724,19 +724,16 @@ impl<'a> InstancePdtClient<'a> {
             })
             .send()
             .await?;
-        // Return updated asset
-        let url2 = format!("{}/api/assets/{}", self.client.base_url, id);
-        let resp = self
-            .client
-            .req_with_instance(
-                reqwest::Method::GET,
-                url2,
-                token,
-                self.instance_id.as_deref(),
-            )
-            .send()
-            .await?;
-        Ok(resp.json::<PdtAsset>().await?)
+        // Return updated asset — with status discrimination: the final GET
+        // must NEVER be decoded unchecked. A PDT 404 here (absent-or-deleted
+        // in the routed store) decoded as PdtAsset surfaces as reqwest's
+        // opaque "error decoding response body", which misdirected the
+        // 0473c444 investigation for a full round. (0.3.12)
+        match self.fetch_asset(id, token).await {
+            AssetFetch::Found(asset) => Ok(asset),
+            AssetFetch::NotFound => anyhow::bail!("PDT asset not found (404): {id}"),
+            AssetFetch::Failed(e) => Err(e),
+        }
     }
 
     pub async fn create_relation(

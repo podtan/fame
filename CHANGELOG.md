@@ -5,6 +5,19 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] - 2026-10-05
+
+### Fixed
+- Status updates on an absent asset reported the opaque reqwest message
+  ("error decoding response body") instead of the truth: the instance-tier
+  tag-update decoded PDT's final GET response WITHOUT a status check, so a
+  PDT 404 (asset absent in the routed store) was parsed as an asset and
+  failed as a decode error — misdirecting the 0473c444 investigation for a
+  full round. The update path now uses the discriminating fetch: absence is
+  a clean 404, everything else stays a loud 500.
+- Entity GET absence (PDT 404) now journals slug/id/instance — listed-but-
+  unGETable records start from a log line, not a mystery.
+
 ## [0.3.11] - 2026-10-04
 
 ### Fixed
