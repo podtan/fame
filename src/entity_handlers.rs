@@ -115,7 +115,14 @@ fn extract_field_value_compact(
                 .map(|s| Value::String(s.to_string()))
         }
         Some(m) if m.starts_with("metadata:") => None, // Not available in compact results
-        Some("created_at") | Some("updated_at") => Some(Value::String(result.updated_at.clone())),
+        Some("created_at") => {
+            // Birth-stamp: project the TRUE value when the search payload
+            // carries it (pdt v0.3.10); omit when absent (older PDT) —
+            // never fabricate updated_at into created_at (issue bbb4882c:
+            // list views showed updated_at as the birth-stamp).
+            result.created_at.clone().map(Value::String)
+        }
+        Some("updated_at") => Some(Value::String(result.updated_at.clone())),
         _ => result
             .get_tag(field_name)
             .map(|s| Value::String(s.to_string())),
@@ -410,6 +417,20 @@ async fn get_entity_inner(
             Json(json!({"error": format!("Unknown entity type: {}", slug)})),
         )
     })?;
+
+    // Malformed ids are a CALLER transcription error, not absence — 422
+    // validation error, never 404 (issue 91ef0f8b: an 8-char prefix read as
+    // 404-absent while the full-UUID asset existed; the 404 masked the
+    // transcription error as "genuinely missing").
+    if uuid::Uuid::parse_str(id).is_err() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "Malformed id: entity ids are UUIDs",
+                "got": id,
+            })),
+        ));
+    }
 
     let asset = match pdt.fetch_asset(id, token).await {
         AssetFetch::Found(asset) => asset,
@@ -874,6 +895,11 @@ default = "active"
 map = "tag:status"
 badge = true
 in_views = ["list", "detail"]
+
+[entity.fields.created_at]
+type = "text"
+map = "created_at"
+in_views = ["list", "detail"]
 "#;
         toml::from_str::<crate::entity_config::EntityFile>(toml_str)
             .expect("parse memory config")
@@ -887,6 +913,7 @@ in_views = ["list", "detail"]
             snippet: None,
             tags,
             updated_at: "2026-10-20T00:00:00Z".to_string(),
+            created_at: None,
         }
     }
 
@@ -945,6 +972,36 @@ in_views = ["list", "detail"]
         assert_eq!(
             entity.get("status").and_then(|s| s.as_str()),
             Some("active")
+        );
+    }
+
+    #[test]
+    fn created_at_projects_true_value_and_never_fabricates() {
+        let config = memory_config();
+        // True birth-stamp flows through (pdt v0.3.10 search results carry
+        // created_at) — issue bbb4882c.
+        let stamped = PdtSearchResult {
+            id: "mem-3".to_string(),
+            title: "Episode: test".to_string(),
+            snippet: None,
+            tags: vec![],
+            updated_at: "2026-10-20T12:00:00Z".to_string(),
+            created_at: Some("2026-10-01T00:00:00Z".to_string()),
+        };
+        let entity = map_compact_to_entity(&stamped, &config);
+        assert_eq!(
+            entity.get("created_at").and_then(|t| t.as_str()),
+            Some("2026-10-01T00:00:00Z"),
+            "list views project the TRUE birth-stamp when the backend serves it"
+        );
+
+        // Older PDT payloads lack created_at — the field is OMITTED, never
+        // fabricated from updated_at (the bbb4882c lie).
+        let unstamped = compact_result(vec![]);
+        let entity = map_compact_to_entity(&unstamped, &config);
+        assert!(
+            entity.get("created_at").is_none(),
+            "absent birth-stamp is omitted — updated_at must never masquerade as created_at"
         );
     }
 
@@ -1476,6 +1533,13 @@ mod identity_content_tests {
     const OLD: &str = "old charter";
     const NEW: &str = "new charter";
 
+    // Fixture ids are UUID-form (issue 91ef0f8b): fame's entity GET validates
+    // id shape at the boundary — non-UUID ids 422 before any fetch, so the
+    // decode/absence fixtures must speak realistic (UUID) wire.
+    pub(super) const DEGENERATE_ID: &str = "00000000-0000-4000-8000-00000000d000";
+    pub(super) const GARBAGE_ID: &str = "00000000-0000-4000-8000-00000000d001";
+    pub(super) const ABSENT_ID: &str = "00000000-0000-4000-8000-00000000d002";
+
     fn user_with(role: &str, groups: &[&str]) -> AuthenticatedUser {
         AuthenticatedUser {
             user_id: "user-test".to_string(),
@@ -1508,7 +1572,7 @@ mod identity_content_tests {
     // Tier selection
     // ------------------------------------------------------------------
 
-    fn prebuilt_pdt_bin() -> Option<std::path::PathBuf> {
+    pub(super) fn prebuilt_pdt_bin() -> Option<std::path::PathBuf> {
         if let Ok(p) = std::env::var("FAME_IT_PDT_BIN") {
             let b = std::path::PathBuf::from(p);
             if b.exists() {
@@ -1521,7 +1585,7 @@ mod identity_content_tests {
         b.exists().then_some(b)
     }
 
-    struct PdtProc(Child);
+    pub(super) struct PdtProc(Child);
     impl Drop for PdtProc {
         fn drop(&mut self) {
             let _ = self.0.kill();
@@ -1552,7 +1616,7 @@ mod identity_content_tests {
         }
     }
 
-    async fn spawn_real_pdt(bin: std::path::PathBuf) -> (String, PdtProc) {
+    pub(super) async fn spawn_real_pdt(bin: std::path::PathBuf) -> (String, PdtProc) {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let tmp = std::env::temp_dir().join(format!("fame-pdt-it-{}-{n}", std::process::id()));
         std::fs::create_dir_all(tmp.join("instances")).expect("tmp instances dir");
@@ -1675,7 +1739,7 @@ mod identity_content_tests {
                 // optional fields are null (the class that once 404'd a live
                 // memory); "garbage-asset" serves unparseable JSON (transport
                 // noise class — must surface as LOUD failure, never 404).
-                if id == "degenerate-asset" {
+                if id == DEGENERATE_ID {
                     let body = serde_json::json!({
                         "_id": id,
                         "title": "Degenerate",
@@ -1691,7 +1755,7 @@ mod identity_content_tests {
                     });
                     return (axum::http::StatusCode::OK, axum::Json(body)).into_response();
                 }
-                if id == "garbage-asset" {
+                if id == GARBAGE_ID {
                     return (
                         axum::http::StatusCode::OK,
                         [("content-type", "application/json")],
@@ -1748,7 +1812,10 @@ mod identity_content_tests {
         let relations_route =
             get(move |Path(_id): Path<String>| async move { axum::Json(serde_json::json!([])) });
 
-        // GET /api/search — compact results, { data: [...] }
+        // GET /api/search — compact results, { data: [...], next_cursor? }
+        // Mirrors the real PDT wire (v0.3.10): keyset cursor on
+        // (updated_at, id) descending, limit+1 page detection, created_at
+        // in results (fame b3209637 + bbb4882c).
         let st = state.clone();
         let search_route = get(
             move |Query(q): Query<std::collections::HashMap<String, String>>| {
@@ -1760,8 +1827,10 @@ mod identity_content_tests {
                         Some((c, v)) => (c.to_string(), v.to_string()),
                         None => (tag.clone(), String::new()),
                     };
+                    let limit: usize = q.get("limit").and_then(|l| l.parse().ok()).unwrap_or(20);
+                    let cursor = q.get("cursor").cloned();
                     let db = st.db.lock().unwrap();
-                    let data: Vec<serde_json::Value> = db
+                    let mut matches: Vec<&serde_json::Value> = db
                         .assets
                         .iter()
                         .filter(|a| {
@@ -1772,16 +1841,55 @@ mod identity_content_tests {
                                 })
                             })
                         })
+                        .collect();
+                    // Keyset cursor: (updated_at, id) descending — mirrors
+                    // sqlite_asset_repository's search cursor.
+                    matches.sort_by(|a, b| {
+                        let ka = (
+                            a["updated_at"].as_str().unwrap_or_default().to_string(),
+                            a["_id"].as_str().unwrap_or_default().to_string(),
+                        );
+                        let kb = (
+                            b["updated_at"].as_str().unwrap_or_default().to_string(),
+                            b["_id"].as_str().unwrap_or_default().to_string(),
+                        );
+                        kb.cmp(&ka)
+                    });
+                    if let Some(c) = &cursor {
+                        let (c_ts, c_id) = c.split_once('|').unwrap_or((c.as_str(), ""));
+                        matches.retain(|a| {
+                            let ts = a["updated_at"].as_str().unwrap_or_default();
+                            let id = a["_id"].as_str().unwrap_or_default();
+                            ts < c_ts || (ts == c_ts && id < c_id)
+                        });
+                    }
+                    let has_more = matches.len() > limit;
+                    let page: Vec<serde_json::Value> = matches
+                        .into_iter()
+                        .take(limit)
                         .map(|a| {
                             serde_json::json!({
                                 "_id": a["_id"],
                                 "title": a["title"],
                                 "tags": a["tags"],
-                                "updated_at": a["updated_at"]
+                                "updated_at": a["updated_at"],
+                                "created_at": a["created_at"]
                             })
                         })
                         .collect();
-                    axum::Json(serde_json::json!({ "data": data })).into_response()
+                    let next_cursor = if has_more {
+                        page.last().map(|a| {
+                            format!(
+                                "{}|{}",
+                                a["updated_at"].as_str().unwrap_or_default(),
+                                a["_id"].as_str().unwrap_or_default()
+                            )
+                        })
+                    } else {
+                        None
+                    };
+                    axum::Json(serde_json::json!({ "data": page, "next_cursor": next_cursor }))
+                        .into_response()
                 }
             },
         );
@@ -2332,6 +2440,87 @@ mod identity_content_tests {
 }
 
 // ---------------------------------------------------------------------------
+// Tests — search cursor pagination (issue b3209637)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod search_pagination_tests {
+    //! Cursor pagination: search_by_tag_paged walks PDT's keyset cursor
+    //! until the store is exhausted — no bounded window, no silent eviction
+    //! of the oldest records. TWO BACKEND TIERS, same harness as
+    //! identity_content_tests (real-pdt sibling binary / in-process mock
+    //! speaking the same wire).
+
+    use crate::pdt::{CreateAssetRequest, CreateTagRequest, PdtClient};
+
+    async fn pagination_env() -> (String, Option<super::identity_content_tests::PdtProc>) {
+        match super::identity_content_tests::prebuilt_pdt_bin() {
+            Some(bin) => {
+                let (base, proc) = super::identity_content_tests::spawn_real_pdt(bin).await;
+                (base, Some(proc))
+            }
+            None => {
+                eprintln!(
+                    "search_pagination_tests: backend = mock-pdt (prebuilt pdt binary not found; \
+                     build ../pdt with `cargo build --no-default-features --features \
+                     sqlite-backend` to run the real tier)"
+                );
+                (super::identity_content_tests::spawn_mock_pdt().await, None)
+            }
+        }
+    }
+
+    /// Page size 2 over 3 matching docs: the paged walk accumulates ALL of
+    /// them across 2 pages — the single-page window would have silently
+    /// evicted the third (the b3209637 defect).
+    #[tokio::test]
+    async fn paged_search_walks_the_cursor_to_exhaustion() {
+        let (base, _proc) = pagination_env().await;
+        let pdt = PdtClient::new(&base);
+
+        for i in 0..3 {
+            pdt.create_asset(
+                CreateAssetRequest {
+                    title: format!("Cursor Page Doc {i}"),
+                    content: Some("pagination body".to_string()),
+                    tags: Some(vec![CreateTagRequest {
+                        category: "type".to_string(),
+                        value: "cursor-doc".to_string(),
+                    }]),
+                    auth_context: None,
+                },
+                None,
+            )
+            .await
+            .expect("seed asset");
+        }
+
+        let all = pdt
+            .search_by_tag_paged("type", "cursor-doc", None, None, 2)
+            .await
+            .expect("paged search succeeds");
+        assert_eq!(
+            all.len(),
+            3,
+            "pagination accumulates the full store — no silent eviction"
+        );
+
+        // The default page-size path (1000) stays a single page here.
+        let single = pdt
+            .search_by_tag("type", "cursor-doc", None)
+            .await
+            .expect("default search succeeds");
+        assert_eq!(single.len(), 3);
+
+        // Birth-stamps flow (pdt v0.3.10): search results carry created_at.
+        assert!(
+            all.iter().any(|r| r.created_at.is_some()),
+            "search results carry created_at (pdt v0.3.10)"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests — get_entity_inner absence/failure discrimination (issue 0473c444)
 // ---------------------------------------------------------------------------
 
@@ -2369,11 +2558,17 @@ mod get_discrimination_tests {
     async fn degenerate_payload_reads_as_entity_not_404() {
         let base = super::identity_content_tests::spawn_mock_pdt().await;
         let state = state_against(&base).await;
-        let result =
-            get_entity_inner(&state, None, None, "procedural-memory", "degenerate-asset").await;
+        let result = get_entity_inner(
+            &state,
+            None,
+            None,
+            "procedural-memory",
+            super::identity_content_tests::DEGENERATE_ID,
+        )
+        .await;
         match result {
             Ok(Json(entity)) => {
-                assert_eq!(entity["id"], "degenerate-asset");
+                assert_eq!(entity["id"], super::identity_content_tests::DEGENERATE_ID);
                 assert_eq!(entity["title"], "Degenerate");
             }
             Err((status, body)) => {
@@ -2387,11 +2582,39 @@ mod get_discrimination_tests {
     async fn true_absence_is_404() {
         let base = super::identity_content_tests::spawn_mock_pdt().await;
         let state = state_against(&base).await;
-        let result =
-            get_entity_inner(&state, None, None, "procedural-memory", "no-such-asset").await;
+        let result = get_entity_inner(
+            &state,
+            None,
+            None,
+            "procedural-memory",
+            super::identity_content_tests::ABSENT_ID,
+        )
+        .await;
         match result {
             Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
             Ok(_) => panic!("absent asset must not resolve"),
+        }
+    }
+
+    /// A malformed (non-UUID) id is a CALLER transcription error — 422
+    /// validation, never 404-absent (issue 91ef0f8b: an 8-char prefix read
+    /// as 404 while the full-UUID asset existed).
+    #[tokio::test]
+    async fn malformed_id_is_422_not_404() {
+        let base = super::identity_content_tests::spawn_mock_pdt().await;
+        let state = state_against(&base).await;
+        let result = get_entity_inner(&state, None, None, "procedural-memory", "0371cf81").await;
+        match result {
+            Err((status, body)) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+                let msg = body.0["error"].as_str().unwrap_or_default();
+                assert!(
+                    msg.contains("Malformed"),
+                    "422 body names the malformation, got: {msg}"
+                );
+                assert_eq!(body.0["got"], "0371cf81", "body echoes the bad id");
+            }
+            Ok(_) => panic!("malformed id must not resolve as an entity"),
         }
     }
 
@@ -2400,8 +2623,14 @@ mod get_discrimination_tests {
     async fn garbage_payload_is_500_not_404() {
         let base = super::identity_content_tests::spawn_mock_pdt().await;
         let state = state_against(&base).await;
-        let result =
-            get_entity_inner(&state, None, None, "procedural-memory", "garbage-asset").await;
+        let result = get_entity_inner(
+            &state,
+            None,
+            None,
+            "procedural-memory",
+            super::identity_content_tests::GARBAGE_ID,
+        )
+        .await;
         match result {
             Err((status, body)) => {
                 assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

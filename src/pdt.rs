@@ -137,12 +137,27 @@ pub struct PdtSearchResult {
     pub snippet: Option<String>,
     pub tags: Vec<PdtTagSummary>,
     pub updated_at: String,
+    /// Birth-stamp (pdt v0.3.10): present when the backend serves it; None
+    /// against older PDTs — list projections then omit the field, never
+    /// fabricate updated_at into it (issue bbb4882c).
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CompactSearchResponse {
     data: Vec<PdtSearchResult>,
+    #[serde(default)]
+    next_cursor: Option<String>,
 }
+
+/// Page size for tag searches feeding list endpoints (raised from 100,
+/// issue b3209637 interim).
+const SEARCH_PAGE_SIZE: i64 = 1000;
+/// Safety cap on pagination pages (1000 × 100 = 100k records) — a
+/// misbehaving backend must not loop the cursor forever; hitting it logs
+/// loudly instead of closing the window silently.
+const MAX_SEARCH_PAGES: usize = 100;
 
 #[derive(Debug, Serialize)]
 pub struct CreateAssetRequest {
@@ -258,11 +273,10 @@ impl PdtClient {
 
     /// Search by tag with instance routing.
     ///
-    /// Page size is 1000 (raised from 100, issue b3209637): the old cap made
-    /// list endpoints a bounded window — records past the cap silently left
-    /// every list while staying GET-able by id, and `total` (reported as
-    /// entities.len() downstream) under-counted. 1000 is headroom, not a
-    /// fix: the proper remedy is true-total semantics + cursor pagination.
+    /// Cursor-paginated (issue b3209637): pages follow PDT's keyset cursor
+    /// until the store is exhausted — the bounded window is gone, `total`
+    /// downstream is the complete matching set, and the oldest records can
+    /// no longer be silently evicted while staying GET-able by id.
     pub async fn search_by_tag_instance(
         &self,
         category: &str,
@@ -270,21 +284,64 @@ impl PdtClient {
         token: Option<&str>,
         instance_id: Option<&str>,
     ) -> Result<Vec<PdtSearchResult>> {
-        let url = format!(
-            "{}/api/search?tag={}:{}&limit=1000",
-            self.base_url, category, value
-        );
-        let resp = self
-            .req_with_instance(reqwest::Method::GET, url, token, instance_id)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("PDT search failed ({}): {}", status, body);
+        self.search_by_tag_paged(category, value, token, instance_id, SEARCH_PAGE_SIZE)
+            .await
+    }
+
+    /// Search by tag with explicit page size — the pagination loop.
+    ///
+    /// Safety cap MAX_SEARCH_PAGES guards against a misbehaving backend
+    /// looping the cursor; hitting it logs loudly — the window must never
+    /// close silently again.
+    pub async fn search_by_tag_paged(
+        &self,
+        category: &str,
+        value: &str,
+        token: Option<&str>,
+        instance_id: Option<&str>,
+        page_size: i64,
+    ) -> Result<Vec<PdtSearchResult>> {
+        let mut all: Vec<PdtSearchResult> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_SEARCH_PAGES {
+            let mut params = vec![
+                ("tag", format!("{}:{}", category, value)),
+                ("limit", page_size.to_string()),
+            ];
+            if let Some(c) = &cursor {
+                params.push(("cursor", c.clone()));
+            }
+            let resp = self
+                .req_with_instance(
+                    reqwest::Method::GET,
+                    format!("{}/api/search", self.base_url),
+                    token,
+                    instance_id,
+                )
+                .query(&params)
+                .send()
+                .await?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("PDT search failed ({}): {}", status, body);
+            }
+            let result = resp.json::<CompactSearchResponse>().await?;
+            let exhausted = result.next_cursor.is_none();
+            all.extend(result.data);
+            if exhausted {
+                return Ok(all);
+            }
+            cursor = result.next_cursor;
         }
-        let result = resp.json::<CompactSearchResponse>().await?;
-        Ok(result.data)
+        tracing::warn!(
+            category = %category,
+            value = %value,
+            pages = MAX_SEARCH_PAGES,
+            records = all.len(),
+            "PDT tag search hit the pagination safety cap — result set may be incomplete"
+        );
+        Ok(all)
     }
 
     /// Full-text search for skill assets — wraps PDT's /api/search with type:skill tag filter.
