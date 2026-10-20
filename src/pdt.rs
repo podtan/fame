@@ -475,7 +475,20 @@ impl PdtClient {
 
         if let Some(tag_id) = existing_tag_id {
             let url = format!("{}/api/assets/{}/tags/{}", self.base_url, id, tag_id);
-            self.req(reqwest::Method::DELETE, url, token).send().await?;
+            // Loud delete — send() alone never raises on 4xx/5xx; a silently
+            // discarded failure here leaves the old tag in place and the
+            // update becomes a duplicate-tag no-op (see the instance-scoped
+            // update_asset_tag for the full class note).
+            let resp = self.req(reqwest::Method::DELETE, url, token).send().await?;
+            let status = resp.status();
+            let bytes = resp.bytes().await?;
+            if !status.is_success() {
+                anyhow::bail!(
+                    "PDT tag delete failed ({}): {}",
+                    status,
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
         }
 
         let url = format!("{}/api/assets/{}/tags", self.base_url, id);
@@ -710,8 +723,50 @@ impl<'a> InstancePdtClient<'a> {
         value: &str,
         token: Option<&str>,
     ) -> Result<PdtAsset> {
+        // Delete-then-post: a same-category tag left in place makes the
+        // update a SILENT NO-OP at the projection layer — get_tag returns
+        // the FIRST match, so the original value wins forever while the
+        // new tag accumulates (wire-proven 2026-10-20: a status update
+        // left BOTH tags and read-back kept showing the old value — the
+        // lying-success behind issues 80c2544e + 6abfa0b5). The old tag
+        // must be gone before the new one lands, and every step fails
+        // LOUD — send() alone never raises on 4xx/5xx.
+        let existing_tag_id = match self.fetch_asset(id, token).await {
+            AssetFetch::Found(a) => a
+                .tags
+                .iter()
+                .find(|t| t.category == category)
+                .map(|t| t.id.clone()),
+            AssetFetch::NotFound => anyhow::bail!("PDT asset not found (404): {id}"),
+            AssetFetch::Failed(e) => return Err(e),
+        };
+
+        if let Some(tag_id) = existing_tag_id {
+            let url = format!("{}/api/assets/{}/tags/{}", self.client.base_url, id, tag_id);
+            let resp = self
+                .client
+                .req_with_instance(
+                    reqwest::Method::DELETE,
+                    url,
+                    token,
+                    self.instance_id.as_deref(),
+                )
+                .send()
+                .await?;
+            let status = resp.status();
+            let bytes = resp.bytes().await?;
+            if !status.is_success() {
+                anyhow::bail!(
+                    "PDT tag delete failed ({}): {}",
+                    status,
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+        }
+
         let url = format!("{}/api/assets/{}/tags", self.client.base_url, id);
-        self.client
+        let resp = self
+            .client
             .req_with_instance(
                 reqwest::Method::POST,
                 url,
@@ -724,6 +779,16 @@ impl<'a> InstancePdtClient<'a> {
             })
             .send()
             .await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            anyhow::bail!(
+                "PDT tag create failed ({}): {}",
+                status,
+                String::from_utf8_lossy(&bytes)
+            );
+        }
+
         // Return updated asset — with status discrimination: the final GET
         // must NEVER be decoded unchecked. A PDT 404 here (absent-or-deleted
         // in the routed store) decoded as PdtAsset surfaces as reqwest's

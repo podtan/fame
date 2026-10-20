@@ -64,6 +64,14 @@ default = "false"
 map = "metadata:pending_update"
 in_views = ["list", "detail"]
 
+[entity.fields.status]
+type = "enum"
+values = ["active", "archived"]
+default = "active"
+map = "tag:status"
+badge = true
+in_views = ["list", "detail"]
+
 [entity.fields.created_at]
 type = "date"
 map = "created_at"
@@ -76,8 +84,8 @@ in_views = ["detail"]
 
 [entity.views.list]
 layout = "card"
-fields = ["title", "domain", "role", "version", "success_rate", "source"]
+fields = ["title", "status", "domain", "role", "version", "success_rate", "source"]
 
 [entity.views.detail]
 layout = "detail"
-fields = ["title", "content", "domain", "role", "version", "execution_count", "success_rate", "source", "pending_update", "created_at", "updated_at"]
+fields = ["title", "status", "content", "domain", "role", "version", "execution_count", "success_rate", "source", "pending_update", "created_at", "updated_at"]

@@ -5,6 +5,40 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] - 2026-10-20
+
+### Fixed
+- The memory status lifecycle was **write-only** (NGHR issues 80c2544e +
+  6abfa0b5): `update_episodic-memory_status` / `update_procedural-memory_status`
+  / `update_semantic-memory_status` validated nothing, wrote a `status` tag to
+  PDT, returned 200 with `updated_at` bumped — and no surface ever projected
+  the tag back. GET/list bodies carried no `status` field and the
+  `?status=` filter matched nothing under any value (0 results for
+  `archived`, `active`, `Archived` against a 147-entity list). Root cause:
+  the three memory entity configs declared no `status` field, so the
+  config-driven projection never emitted one while the update endpoint
+  wrote it anyway — a write the API accepted and stored unobservably.
+- The three memory configs now declare the lifecycle: `status` enum
+  (`active` | `archived`, default `active`, mapped to the `status` tag),
+  surfaced in list + detail views. Declared field defaults now fill absent
+  mapped values in both projection paths, so never-statused memories
+  project `active` and the `?status=` filter matches the full set —
+  positive AND negative controls hold (an untouched entity is absent from
+  the `archived` filter).
+- Status validation is now live for memories (invalid values → 400 with
+  `allowed_values`), the update response echoes the stored status, and the
+  served spec documents the accepted vocabulary on both the list `?status=`
+  param and the PATCH body schema.
+- The instance-scoped `update_asset_tag` was **post-only** — it never
+  removed the existing tag of the same category, so every status update
+  ACCUMULATED a duplicate tag while `get_tag` returned the first match:
+  the original value won forever and the update was a silent no-op at the
+  projection layer (wire-proven 2026-10-20: an update left BOTH `active`
+  and `archived` tags and read-back kept showing the old value). The
+  update is now delete-then-post on both PDT clients, and every delete/
+  post step checks the HTTP status — `send()` alone never raises on
+  4xx/5xx, so a discarded failure re-created the duplicate silently.
+
 ## [0.3.12] - 2026-10-05
 
 ### Fixed

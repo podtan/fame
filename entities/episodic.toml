@@ -54,6 +54,14 @@ default = "false"
 map = "metadata:consolidated"
 in_views = ["list", "detail"]
 
+[entity.fields.status]
+type = "enum"
+values = ["active", "archived"]
+default = "active"
+map = "tag:status"
+badge = true
+in_views = ["list", "detail"]
+
 [entity.fields.created_at]
 type = "date"
 map = "created_at"
@@ -66,8 +74,8 @@ in_views = ["detail"]
 
 [entity.views.list]
 layout = "card"
-fields = ["title", "domain", "outcome", "consolidated", "created_at"]
+fields = ["title", "status", "domain", "outcome", "consolidated", "created_at"]
 
 [entity.views.detail]
 layout = "detail"
-fields = ["title", "content", "domain", "outcome", "task_id", "duration_mins", "consolidated", "created_at", "updated_at"]
+fields = ["title", "status", "content", "domain", "outcome", "task_id", "duration_mins", "consolidated", "created_at", "updated_at"]

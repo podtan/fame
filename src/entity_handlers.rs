@@ -167,7 +167,19 @@ pub fn map_asset_to_entity(asset: &PdtAsset, config: &EntityConfig) -> Value {
     entity.insert("id".to_string(), Value::String(asset.id.clone()));
 
     for (field_name, field_config) in &config.fields {
-        if let Some(v) = extract_field_value(asset, field_name, &field_config.map, config) {
+        // Declared field defaults fill absent mapped values — a memory with
+        // no status tag projects its default status ("active"), so the
+        // lifecycle is observable for the FULL set: GET/list show a status
+        // for never-statused records and the ?status= filter matches them
+        // (issues 80c2544e + 6abfa0b5: status was write-only — the update
+        // endpoint stored a tag nothing ever projected).
+        let v = extract_field_value(asset, field_name, &field_config.map, config).or_else(|| {
+            field_config
+                .default
+                .as_ref()
+                .map(|d| Value::String(d.clone()))
+        });
+        if let Some(v) = v {
             entity.insert(field_name.clone(), v);
         }
     }
@@ -182,8 +194,16 @@ pub fn map_compact_to_entity(result: &PdtSearchResult, config: &EntityConfig) ->
     entity.insert("id".to_string(), Value::String(result.id.clone()));
 
     for (field_name, field_config) in &config.fields {
-        if let Some(v) = extract_field_value_compact(result, field_name, &field_config.map, config)
-        {
+        // Same default-fill as map_asset_to_entity (see note there).
+        let v = extract_field_value_compact(result, field_name, &field_config.map, config).or_else(
+            || {
+                field_config
+                    .default
+                    .as_ref()
+                    .map(|d| Value::String(d.clone()))
+            },
+        );
+        if let Some(v) = v {
             entity.insert(field_name.clone(), v);
         }
     }
@@ -819,6 +839,146 @@ mod auth_context_stamp_tests {
     fn mem_group_preferred_over_ws_admins() {
         let groups = vec!["ws-abc-admins".to_string(), "mem-ff766ee2".to_string()];
         assert_eq!(pick_owner_group(&groups).as_deref(), Some("mem-ff766ee2"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — memory status lifecycle projection (issues 80c2544e + 6abfa0b5)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod status_lifecycle_tests {
+    use super::*;
+    use crate::pdt::{PdtAsset, PdtTagSummary};
+
+    fn memory_config() -> EntityConfig {
+        let toml_str = r#"
+[entity]
+name = "Episodic Memory"
+slug = "episodic-memory"
+title_prefix = "Episode: "
+handler = "generic"
+
+[entity.default_tags]
+type = "agent-memory"
+memory-type = "episodic"
+
+[entity.fields.title]
+type = "text"
+map = "title_suffix"
+
+[entity.fields.status]
+type = "enum"
+values = ["active", "archived"]
+default = "active"
+map = "tag:status"
+badge = true
+in_views = ["list", "detail"]
+"#;
+        toml::from_str::<crate::entity_config::EntityFile>(toml_str)
+            .expect("parse memory config")
+            .entity
+    }
+
+    fn compact_result(tags: Vec<PdtTagSummary>) -> PdtSearchResult {
+        PdtSearchResult {
+            id: "mem-1".to_string(),
+            title: "Episode: test".to_string(),
+            snippet: None,
+            tags,
+            updated_at: "2026-10-20T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn absent_status_tag_projects_declared_default() {
+        let config = memory_config();
+        let result = compact_result(vec![PdtTagSummary {
+            category: "type".to_string(),
+            value: "agent-memory".to_string(),
+        }]);
+        let entity = map_compact_to_entity(&result, &config);
+        assert_eq!(
+            entity.get("status").and_then(|s| s.as_str()),
+            Some("active"),
+            "never-statused memories project the declared default — the lifecycle is observable for the full set"
+        );
+    }
+
+    #[test]
+    fn stored_status_tag_projects_verbatim() {
+        let config = memory_config();
+        let result = compact_result(vec![
+            PdtTagSummary {
+                category: "type".to_string(),
+                value: "agent-memory".to_string(),
+            },
+            PdtTagSummary {
+                category: "status".to_string(),
+                value: "archived".to_string(),
+            },
+        ]);
+        let entity = map_compact_to_entity(&result, &config);
+        assert_eq!(
+            entity.get("status").and_then(|s| s.as_str()),
+            Some("archived")
+        );
+    }
+
+    #[test]
+    fn full_asset_projection_fills_default_too() {
+        let config = memory_config();
+        let asset = PdtAsset {
+            id: "mem-2".to_string(),
+            title: "Episode: test".to_string(),
+            content: String::new(),
+            tags: vec![],
+            metadata: HashMap::new(),
+            created_at: "2026-10-20T00:00:00Z".to_string(),
+            updated_at: "2026-10-20T00:00:00Z".to_string(),
+            created_by: String::new(),
+            updated_by: String::new(),
+            deleted_at: None,
+            auth_context: None,
+        };
+        let entity = map_asset_to_entity(&asset, &config);
+        assert_eq!(
+            entity.get("status").and_then(|s| s.as_str()),
+            Some("active")
+        );
+    }
+
+    #[test]
+    fn status_filter_semantics_positive_and_negative_controls() {
+        // The list filter reads the projected entity — with default-fill it
+        // matches never-statused records under the default value and excludes
+        // them from any other value (the issue's negative control).
+        let config = memory_config();
+        let untagged = map_compact_to_entity(
+            &compact_result(vec![PdtTagSummary {
+                category: "type".to_string(),
+                value: "agent-memory".to_string(),
+            }]),
+            &config,
+        );
+        let archived = map_compact_to_entity(
+            &compact_result(vec![PdtTagSummary {
+                category: "status".to_string(),
+                value: "archived".to_string(),
+            }]),
+            &config,
+        );
+
+        let matches = |entity: &Value, filter: &str| {
+            entity.get("status").and_then(|s| s.as_str()) == Some(filter)
+        };
+        assert!(matches(&untagged, "active"));
+        assert!(
+            !matches(&untagged, "archived"),
+            "negative control: untouched entity absent from the archived filter"
+        );
+        assert!(matches(&archived, "archived"));
+        assert!(!matches(&archived, "active"));
     }
 }
 /// PATCH /api/v1/{slug}/{id}/status — update entity status

@@ -223,7 +223,19 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
             });
         }
 
-        // PATCH /{base}/{id}/status
+        // PATCH /{base}/{id}/status — the body schema carries the accepted
+        // vocabulary when the entity declares one, so callers learn the
+        // enum from the served spec itself (issues 80c2544e + 6abfa0b5).
+        let mut status_body_schema = json!({
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"]
+        });
+        if let Some(values) = config.status_values() {
+            status_body_schema["properties"]["status"]["enum"] =
+                Value::Array(values.iter().map(|v| Value::String(v.clone())).collect());
+        }
+
         paths[&format!("{}/{{id}}/status", base_path)] = json!({
             "patch": {
                 "operationId": format!("update_{}_status", config.slug),
@@ -234,13 +246,7 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
                 "requestBody": {
                     "content": {
                         "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "status": {"type": "string"}
-                                },
-                                "required": ["status"]
-                            }
+                            "schema": status_body_schema
                         }
                     }
                 },

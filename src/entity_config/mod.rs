@@ -385,6 +385,32 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
         assert_eq!(entity.default_status(), Some("draft"));
     }
 
+    /// The memory entity configs must declare the status lifecycle (issues
+    /// 80c2544e + 6abfa0b5: update_*_memory_status wrote a status tag nothing
+    /// ever projected and the ?status= filter matched nothing). Pins the
+    /// SHIPPED configs, not an inline sample.
+    #[test]
+    fn test_memory_configs_declare_status_lifecycle() {
+        for (name, src) in [
+            ("episodic", include_str!("../../entities/episodic.toml")),
+            ("procedural", include_str!("../../entities/procedural.toml")),
+            ("semantic", include_str!("../../entities/semantic.toml")),
+        ] {
+            let file: EntityFile =
+                toml::from_str(src).unwrap_or_else(|e| panic!("{name}: parse failed: {e}"));
+            let entity = &file.entity;
+            let values = entity
+                .status_values()
+                .unwrap_or_else(|| panic!("{name}: no status field declared"));
+            assert_eq!(
+                values,
+                vec!["active".to_string(), "archived".to_string()],
+                "{name}"
+            );
+            assert_eq!(entity.default_status(), Some("active"), "{name}");
+        }
+    }
+
     /// Regression for the cross-type memory leak: the three memory entities
     /// share type=agent-memory and are discriminated ONLY by memory-type.
     /// tags_match must require every default tag, and must work for both
