@@ -17,15 +17,9 @@ mod tests {
     use super::*;
     use crate::entity_config::EntityFile;
 
-    /// The served spec must carry the list-bound surface: limit + verbose
-    /// params on every config-driven list route, `returned` in every
-    /// ListResponse schema. Also dumps docs/openapi.json — the versioned
-    /// artifact Paydar syncs into the aether configs (both copies) at
-    /// deploy; a code change that moves the spec shows up as this file's
-    /// diff in review.
-    #[test]
-    fn generated_spec_carries_list_bound_surface() {
-        let configs: Vec<Arc<EntityConfig>> = [
+    /// The three memory entity configs, loaded the same way main.rs loads them.
+    fn test_configs() -> Vec<Arc<EntityConfig>> {
+        [
             include_str!("../entities/episodic.toml"),
             include_str!("../entities/procedural.toml"),
             include_str!("../entities/semantic.toml"),
@@ -35,7 +29,18 @@ mod tests {
             let file: EntityFile = toml::from_str(src).unwrap();
             Arc::new(file.entity)
         })
-        .collect();
+        .collect()
+    }
+
+    /// The served spec must carry the list-bound surface: limit + verbose
+    /// params on every config-driven list route, `returned` in every
+    /// ListResponse schema. Also dumps docs/openapi.json — the versioned
+    /// artifact Paydar syncs into the aether configs (both copies) at
+    /// deploy; a code change that moves the spec shows up as this file's
+    /// diff in review.
+    #[test]
+    fn generated_spec_carries_list_bound_surface() {
+        let configs = test_configs();
 
         let api = generate_merged_openapi(&configs);
         let spec: Value = serde_json::to_value(&api).unwrap();
@@ -83,6 +88,20 @@ mod tests {
         )
         .unwrap();
     }
+
+    /// The served spec's info.version must equal the crate version — a static
+    /// stamp hides spec staleness (05ee9d60 class): aether once bundled a
+    /// stale fame spec while the served version claimed nothing had moved.
+    #[test]
+    fn served_spec_version_matches_crate() {
+        let api = generate_merged_openapi(&test_configs());
+        let spec: Value = serde_json::to_value(&api).unwrap();
+        assert_eq!(
+            spec["info"]["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "served spec version must derive from the crate version, not a static stamp"
+        );
+    }
 }
 
 /// Generate a merged OpenAPI spec: the existing utoipa [`ApiDoc`] paths/schemas
@@ -103,6 +122,17 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
             "components": {"schemas": {}},
         })
     });
+
+    // info.version derives from the crate version — a static stamp hides spec
+    // staleness (05ee9d60 class): aether once bundled a stale fame spec while
+    // the served version claimed nothing had moved. Patched after the base-spec
+    // serialization so both the utoipa path and the fallback above carry the
+    // live crate version; the served spec can never claim a version the crate
+    // doesn't.
+    if spec.get("info").is_none() {
+        spec["info"] = json!({});
+    }
+    spec["info"]["version"] = json!(env!("CARGO_PKG_VERSION"));
 
     // Ensure paths and components exist
     if spec.get("paths").is_none() {
