@@ -9,10 +9,6 @@ use thiserror::Error;
 pub enum AuthError {
     #[error("Missing authentication token")]
     MissingToken,
-    #[error("Invalid token: {0}")]
-    InvalidToken(String),
-    #[error("Invalid claims: {0}")]
-    InvalidClaims(String),
     /// Claims enrichment against the IdP userinfo endpoint failed — the
     /// presented token cannot be resolved to a principal with authorization
     /// attributes. This is an AUTHENTICATION failure and must answer 401
@@ -34,8 +30,6 @@ pub enum AuthError {
     EnrichmentFailed(String),
     #[error("PEP error: {0}")]
     PepError(#[from] pep::error::PepError),
-    #[error("Internal error: {0}")]
-    Internal(String),
 }
 
 impl AuthError {
@@ -72,7 +66,7 @@ impl IntoResponse for AuthError {
                 );
                 resp
             }
-            AuthError::MissingToken | AuthError::InvalidToken(_) => {
+            AuthError::MissingToken => {
                 let mut resp = (StatusCode::UNAUTHORIZED, self.to_string()).into_response();
                 resp.headers_mut().insert(
                     header::WWW_AUTHENTICATE,
@@ -82,11 +76,7 @@ impl IntoResponse for AuthError {
                 );
                 resp
             }
-            AuthError::InvalidClaims(_) => {
-                (StatusCode::FORBIDDEN, self.to_string()).into_response()
-            }
             AuthError::PepError(ref e) => (e.status_code(), self.to_string()).into_response(),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response(),
         }
     }
 }
@@ -129,14 +119,14 @@ mod tests {
     }
 
     /// 403 must NEVER appear on the enrichment-failure path — that is the
-    /// lying status that masked this bug class (b82a1925).
+    /// lying status that masked this bug class (b82a1925). Authz denials
+    /// 403 through the Cedar enforcement path (StatusCode::FORBIDDEN),
+    /// never through AuthError.
     #[test]
-    fn authz_denial_stays_403_and_enrichment_never_is() {
-        let claims_resp = AuthError::InvalidClaims("no permit".to_string()).into_response();
-        assert_eq!(claims_resp.status(), StatusCode::FORBIDDEN);
-
+    fn enrichment_failure_is_never_403() {
         let enrich_resp = AuthError::EnrichmentFailed("x".to_string()).into_response();
         assert_ne!(enrich_resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(enrich_resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]

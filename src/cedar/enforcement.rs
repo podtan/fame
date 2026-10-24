@@ -8,118 +8,21 @@ use cedar_policy::{Context, Entities, Entity, Request, RestrictedExpression};
 use pep::cedar::CedarAuthorizer;
 use pep::oidc::types::JwtClaims;
 
-use crate::auth::AuthenticatedUser;
-
-/// Extract JwtClaims from AuthenticatedUser for Cedar evaluation.
-pub fn extract_claims_for_cedar(user: &AuthenticatedUser) -> JwtClaims {
-    user.to_cedar_claims()
-}
-
 /// Metadata key on AgentIdentity assets holding the workspace's Kanidm
 /// admin group — the workspace-scoping anchor for Cedar (0.2.0).
 pub const ADMIN_GROUP_METADATA_KEY: &str = "admin_group";
 
-/// Check if a user can perform an action on a resource type.
-///
-/// Returns `Ok(())` if allowed, `Err(StatusCode::FORBIDDEN)` if denied.
-/// Returns `Err(StatusCode::INTERNAL_SERVER_ERROR)` on evaluation errors.
-pub fn check_permission(
-    authorizer: &CedarAuthorizer,
-    claims: &JwtClaims,
-    action: &str,
-    entity_type: &str,
-    entity_id: &str,
-) -> Result<(), StatusCode> {
-    let principal = pep::cedar::build_principal_uid(claims).map_err(|e| {
-        tracing::error!("Cedar principal build failed: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let action_uid = pep::cedar::build_action_uid(action).map_err(|e| {
-        tracing::error!("Cedar action build failed: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let resource = pep::cedar::entity::ResourceInfo::new(entity_type, entity_id)
-        .to_cedar_uid()
-        .map_err(|e| {
-            tracing::error!("Cedar resource build failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    // Build principal entity with role/groups for attribute-based policies
-    let principal_entity = crate::cedar::entity::user_to_cedar_principal(claims).map_err(|e| {
-        tracing::error!("Cedar principal entity build failed: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let entities = Entities::from_entities([principal_entity], None).map_err(|e| {
-        tracing::error!("Cedar entities build failed: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let request =
-        Request::new(principal, action_uid, resource, Context::empty(), None).map_err(|e| {
-            tracing::error!("Cedar request build failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    tracing::debug!(
-        "Cedar eval: action={}, resource={}:{}",
-        action,
-        entity_type,
-        entity_id
-    );
-
-    let response = authorizer.is_allowed_with_entities(&request, &entities);
-
-    // Log detailed response for debugging
-    if response.has_errors() {
-        tracing::error!(
-            "Cedar evaluation ERRORS for {} {} on {}:{} for user {}: {:?}",
-            action,
-            entity_type,
-            entity_type,
-            entity_id,
-            claims.sub,
-            response.errors()
-        );
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    if response.allowed() {
-        Ok(())
-    } else {
-        tracing::warn!(
-            "Cedar denied {} {} on {}:{} for user {}",
-            action,
-            entity_type,
-            entity_type,
-            entity_id,
-            claims.sub
-        );
-        Err(StatusCode::FORBIDDEN)
-    }
-}
-
-/// Check if user can perform action — returns bool (for filtering).
-pub fn is_allowed(
-    authorizer: &CedarAuthorizer,
-    claims: &JwtClaims,
-    action: &str,
-    entity_type: &str,
-    entity_id: &str,
-) -> bool {
-    check_permission(authorizer, claims, action, entity_type, entity_id).is_ok()
-}
-
 /// Check an action against a resource that carries string attributes
 /// (workspace-scoped authorization, 0.2.0).
 ///
-/// The plain `check_permission` builds a bare resource UID — fine for
-/// role-only policies, useless for policies that reference resource
-/// attributes (`resource.admin_group`). This variant constructs a full
-/// resource Entity carrying the given attributes so attribute-based
-/// conditions can evaluate.
+/// Constructs a full resource Entity carrying the given attributes so
+/// attribute-based conditions (`resource.admin_group`) can evaluate; with
+/// empty attrs it doubles as the role-only path — this is the ONE
+/// enforcement path (the former bare-UID `check_permission`/`is_allowed`
+/// pair was dead code and is subtracted).
+///
+/// Returns `Ok(())` if allowed, `Err(StatusCode::FORBIDDEN)` if denied,
+/// `Err(StatusCode::INTERNAL_SERVER_ERROR)` on evaluation errors.
 pub fn check_permission_scoped(
     authorizer: &CedarAuthorizer,
     claims: &JwtClaims,
@@ -275,12 +178,13 @@ mod tests {
         // Positive control: admin can create semantic memories
         let admin = claims_with_role(Some("admin"));
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &admin,
                 "CreateSemanticMemory",
                 &resource_type,
-                "<_>"
+                "<_>",
+                &[]
             ),
             Ok(())
         );
@@ -288,12 +192,13 @@ mod tests {
         // Negative control: viewer denied
         let viewer = claims_with_role(Some("viewer"));
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &viewer,
                 "CreateSemanticMemory",
                 &resource_type,
-                "<_>"
+                "<_>",
+                &[]
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -302,12 +207,13 @@ mod tests {
         // the policy guards with `has role` instead of accessing it)
         let norole = claims_with_role(None);
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &norole,
                 "CreateSemanticMemory",
                 &resource_type,
-                "<_>"
+                "<_>",
+                &[]
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -324,24 +230,26 @@ mod tests {
 
         // Allowed for agent: create episodic
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &agent,
                 "CreateEpisodicMemory",
                 &crate::entity_config::slug_to_cedar_type("episodic-memory"),
-                "<_>"
+                "<_>",
+                &[]
             ),
             Ok(())
         );
 
         // Denied for agent: delete semantic
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &agent,
                 "DeleteSemanticMemory",
                 &crate::entity_config::slug_to_cedar_type("semantic-memory"),
-                "<_>"
+                "<_>",
+                &[]
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -349,12 +257,13 @@ mod tests {
         // Allowed for agent: identity bootstrap create (charter flow,
         // v0.3.2+ — managers provision their reports' empty identities)
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &agent,
                 "CreateAgentIdentity",
                 &crate::entity_config::slug_to_cedar_type("agent-identity"),
-                "<_>"
+                "<_>",
+                &[]
             ),
             Ok(())
         );
@@ -393,12 +302,13 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &user,
                 "ViewAgentIdentity",
                 &identity,
-                "some-agent-id"
+                "some-agent-id",
+                &[]
             ),
             Ok(())
         );
@@ -406,28 +316,37 @@ mod tests {
         // Memory inspection allowed (debugging), memory writes denied
         let memory = crate::entity_config::slug_to_cedar_type("semantic-memory");
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &user,
                 "ViewSemanticMemory",
                 &memory,
-                "some-memory-id"
+                "some-memory-id",
+                &[]
             ),
             Ok(())
         );
         assert_eq!(
-            check_permission(&authorizer, &user, "CreateSemanticMemory", &memory, "<_>"),
+            check_permission_scoped(
+                &authorizer,
+                &user,
+                "CreateSemanticMemory",
+                &memory,
+                "<_>",
+                &[]
+            ),
             Err(StatusCode::FORBIDDEN)
         );
 
         // Deletes stay admin-only for everyone
         assert_eq!(
-            check_permission(
+            check_permission_scoped(
                 &authorizer,
                 &user,
                 "DeleteAgentIdentity",
                 &identity,
-                "some-agent-id"
+                "some-agent-id",
+                &[]
             ),
             Err(StatusCode::FORBIDDEN)
         );

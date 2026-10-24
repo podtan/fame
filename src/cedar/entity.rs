@@ -3,10 +3,10 @@
 //! Converts NGHR resource types and JWT claims into Cedar entities
 //! for authorization evaluation.
 
-use cedar_policy::{Entity, EntityUid, RestrictedExpression};
+use cedar_policy::{Entity, RestrictedExpression};
 use std::collections::{HashMap, HashSet};
 
-use pep::cedar::{build_principal_uid, ResourceInfo};
+use pep::cedar::build_principal_uid;
 use pep::oidc::types::JwtClaims;
 
 /// Build a Cedar principal Entity from JWT claims with role and groups.
@@ -76,17 +76,6 @@ pub fn user_to_cedar_principal(claims: &JwtClaims) -> Result<Entity, pep::cedar:
     }
 
     Entity::new(uid, attrs, HashSet::new()).map_err(|e| {
-        pep::cedar::CedarError::EntityBuildFailed(format!(
-            "principal entity build failed: {}",
-            e
-        ))
+        pep::cedar::CedarError::EntityBuildFailed(format!("principal entity build failed: {}", e))
     })
-}
-
-/// Build a Cedar EntityUid for a resource type and ID.
-pub fn build_resource_uid(
-    entity_type: &str,
-    id: &str,
-) -> Result<EntityUid, pep::cedar::CedarError> {
-    ResourceInfo::new(entity_type, id).to_cedar_uid()
 }
