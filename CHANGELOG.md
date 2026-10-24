@@ -5,6 +5,28 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2026-10-20
+
+### Fixed
+- List projections stopped **fabricating `updated_at` into `created_at`**
+  (bbb4882c): the true birth-stamp now flows from pdt v0.3.10 search
+  results; on older PDT tiers the field is omitted — absent, never a lie.
+  Guard: `created_at_projects_true_value_and_never_fabricates`.
+- Entity list endpoints are **cursor-paginated** (b3209637): `search_by_tag`
+  walks PDT's keyset cursor until exhaustion — the bounded window is gone,
+  `total` is the complete matching set, and the oldest records can no longer
+  be silently evicted while staying GET-able by id. A 100-page safety cap
+  logs loudly if ever hit (a misbehaving backend must not loop the cursor).
+  This closes the interim mitigation left open in 0.3.10.
+  Guard: `paged_search_walks_the_cursor_to_exhaustion` (two-tier).
+- Entity GET **validates id shape at the boundary** (91ef0f8b): malformed
+  (non-UUID) ids answer 422 validation error — never 404-absent, which
+  masked caller transcription errors as "genuinely missing".
+  Guard: `malformed_id_is_422_not_404`.
+
+Gates at ship: build clean; 50/50 tests; fmt clean; warning delta zero.
+Rollback pin: v0.3.13 @ 72289e8.
+
 ## [0.3.13] - 2026-10-20
 
 ### Fixed
@@ -171,7 +193,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release: generic TOML-config-driven entity engine over PDT — semantic, episodic,
   and procedural memory per agent, scoped via `X-Instance-Id`, with OIDC auth (pep).
 
-[Unreleased]: https://github.com/Podtan/fame/compare/v0.3.9...HEAD
+[Unreleased]: https://github.com/Podtan/fame/compare/v0.3.14...HEAD
+[0.3.14]: https://github.com/Podtan/fame/compare/v0.3.13...v0.3.14
+[0.3.13]: https://github.com/Podtan/fame/compare/v0.3.12...v0.3.13
+[0.3.12]: https://github.com/Podtan/fame/compare/v0.3.11...v0.3.12
+[0.3.11]: https://github.com/Podtan/fame/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/Podtan/fame/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/Podtan/fame/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/Podtan/fame/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/Podtan/fame/compare/v0.3.6...v0.3.7
