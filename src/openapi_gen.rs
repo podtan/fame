@@ -12,6 +12,79 @@ use utoipa::OpenApi as OpenApiDerive;
 
 use crate::entity_config::{EntityConfig, FieldType};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_config::EntityFile;
+
+    /// The served spec must carry the list-bound surface: limit + verbose
+    /// params on every config-driven list route, `returned` in every
+    /// ListResponse schema. Also dumps docs/openapi.json — the versioned
+    /// artifact Paydar syncs into the aether configs (both copies) at
+    /// deploy; a code change that moves the spec shows up as this file's
+    /// diff in review.
+    #[test]
+    fn generated_spec_carries_list_bound_surface() {
+        let configs: Vec<Arc<EntityConfig>> = [
+            include_str!("../entities/episodic.toml"),
+            include_str!("../entities/procedural.toml"),
+            include_str!("../entities/semantic.toml"),
+        ]
+        .iter()
+        .map(|src| {
+            let file: EntityFile = toml::from_str(src).unwrap();
+            Arc::new(file.entity)
+        })
+        .collect();
+
+        let api = generate_merged_openapi(&configs);
+        let spec: Value = serde_json::to_value(&api).unwrap();
+
+        // The three memory list routes exist and carry limit + verbose.
+        for slug in ["episodic-memorys", "procedural-memorys", "semantic-memorys"] {
+            let path = format!("/api/v1/{slug}");
+            let get = spec["paths"]
+                .get(&path)
+                .and_then(|p| p.get("get"))
+                .unwrap_or_else(|| panic!("{path}: list route missing from spec"));
+            let params = get["parameters"].as_array().unwrap();
+            let names: Vec<&str> = params.iter().filter_map(|p| p["name"].as_str()).collect();
+            assert!(names.contains(&"limit"), "{path}: limit param missing");
+            assert!(names.contains(&"verbose"), "{path}: verbose param missing");
+        }
+
+        // Every generated ListResponse schema carries returned.
+        let schemas = spec["components"]["schemas"].as_object().unwrap();
+        let list_schemas: Vec<(&String, &Value)> = schemas
+            .iter()
+            .filter(|(_, s)| {
+                s.get("properties")
+                    .and_then(|p| p.get("entities"))
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(
+            list_schemas.len(),
+            3,
+            "three ListResponse schemas expected (one per memory family)"
+        );
+        for (name, s) in list_schemas {
+            assert!(
+                s["properties"].get("returned").is_some(),
+                "{name}: ListResponse schema missing returned"
+            );
+        }
+
+        // Dump the versioned artifact for the aether sync.
+        std::fs::create_dir_all("docs").unwrap();
+        std::fs::write(
+            "docs/openapi.json",
+            serde_json::to_string_pretty(&spec).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 /// Generate a merged OpenAPI spec: the existing utoipa [`ApiDoc`] paths/schemas
 /// plus dynamically generated paths/schemas for all config-driven entities.
 ///
@@ -70,9 +143,10 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
                         "$ref": format!("#/components/schemas/{}", entity_name)
                     }
                 },
-                "total": {"type": "integer"}
+                "total": {"type": "integer"},
+                "returned": {"type": "integer"}
             },
-            "required": ["entities", "total"]
+            "required": ["entities", "total", "returned"]
         });
 
         // --- Add paths ---
@@ -93,6 +167,20 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
                 "required": false,
                 "schema": {"type": "string"},
                 "description": "Filter by relation target (e.g. project ID)"
+            }),
+            json!({
+                "name": "limit",
+                "in": "query",
+                "required": false,
+                "schema": {"type": "integer", "minimum": 0},
+                "description": "Max rows returned. DEFAULT 20 (newest-first by updated_at) — a naive list call can never flood a context. Response always carries the true total + returned. Pass a larger limit (e.g. 10000) for a deliberate full inventory."
+            }),
+            json!({
+                "name": "verbose",
+                "in": "query",
+                "required": false,
+                "schema": {"type": "boolean"},
+                "description": "Full list rows: 200-char title, created_at, family metadata (consolidated/outcome/source), full-precision updated_at. Default false = slim rows (id, title <=80, status, updated_at minute-precision UTC). Full content is GET-by-id only in both shapes."
             }),
         ];
 

@@ -5,6 +5,31 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2026-10-24
+
+### Fixed
+- List rows are **slim by default** (owner-directed): a list row is now
+  `{id, title(≤80 with "…"), status, updated_at(minute-precision UTC)}` —
+  ~195 bytes vs ~422. `created_at`, family metadata
+  (consolidated/outcome/source), and the long title are GET-by-id
+  territory; `verbose=true` restores the full compact row (200-char
+  title, created_at, family metadata, full-precision timestamps).
+  Non-UTC timestamps are converted to UTC before the short form — never
+  mislabeled; unparseable stamps pass through verbatim.
+- List endpoints are **bounded by default** (owner-measured, 2026-10-24):
+  a naive list call returned a 380-row store (~66K tokens added on an
+  8.9K baseline — a natural-language "ask for less" never reached the
+  wire, and opt-in paging can't stop what callers don't opt into). Every
+  list response now carries the newest 20 rows by default
+  (`DEFAULT_LIST_LIMIT`, matching PDT's own search default), with the
+  TRUE `total` + `returned` always present — honest paging, never the
+  lying class (b3209637). `limit` is an override for deliberate full
+  inventories. The cut happens after the updated_at-DESC sort, so a
+  bounded page keeps the newest rows restore rituals actually read.
+  Applies to all four generic list surfaces; the OpenAPI spec (and the
+  aether-derived MCP tool) carries the `limit` + `verbose` params and
+  the `returned` field.
+
 ## [0.3.15] - 2026-10-24
 
 ### Fixed

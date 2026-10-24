@@ -284,6 +284,20 @@ pub struct ListEntitiesQuery {
     pub status: Option<String>,
     /// Filter by relation target (e.g. project_id for "related_to")
     pub attached_to: Option<String>,
+    /// Max rows returned. DEFAULT-BOUNDED (DEFAULT_LIST_LIMIT): a naive
+    /// "list everything" call can never flood a context — the owner-measured
+    /// pain (2026-10-24): a 380-row store added ~66K tokens on an 8.9K
+    /// baseline, and a natural-language "ask for less" never reaches the
+    /// wire. The response always carries the TRUE total + returned, so a
+    /// bounded page is honest paging, never the lying class (b3209637).
+    /// Pass a larger limit for a deliberate full inventory.
+    pub limit: Option<usize>,
+    /// Full list rows: 200-char title, created_at, family metadata
+    /// (consolidated/outcome/source), full-precision updated_at. Default
+    /// false = slim rows (id, title ≤80, status, updated_at minute-precision)
+    /// — the fields a list view is FOR; everything else is GET-by-id
+    /// territory.
+    pub verbose: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -423,11 +437,93 @@ async fn list_entities_inner(
         b_time.cmp(a_time)
     });
 
-    let total = entities.len();
+    // Slim rows by default — AFTER the sort (full-precision timestamps sort
+    // exactly; the slim minute-precision form would tie within a minute).
+    // verbose=true restores the full compact row.
+    if !query.verbose.unwrap_or(false) {
+        entities = entities.into_iter().map(slim_list_row).collect();
+    }
+
+    let (entities, total, returned) = apply_limit(entities, query.limit);
     Ok(Json(json!({
         "entities": entities,
         "total": total,
+        "returned": returned,
     })))
+}
+
+/// List responses are bounded BY DEFAULT: the newest DEFAULT_LIST_LIMIT rows
+/// (updated_at DESC — the sort happens before the cut, so a bounded page
+/// keeps what restore rituals actually read). A naive list call can never
+/// flood a context: the owner-measured pain (2026-10-24) was a 380-row
+/// store adding ~66K tokens on an 8.9K baseline. 20 matches PDT's own
+/// search default (limit unwrap_or(20)) — substrate-consistent.
+const DEFAULT_LIST_LIMIT: usize = 20;
+
+/// Apply the list bound. Returns `(page, total, returned)`: `total` is the
+/// TRUE store count (never the page count — b3209637 class), `returned` is
+/// what this response carries. A bounded page is honest paging: the caller
+/// always sees "N of total", never a lying listing.
+fn apply_limit(entities: Vec<Value>, limit: Option<usize>) -> (Vec<Value>, usize, usize) {
+    let total = entities.len();
+    let mut page = entities;
+    let n = limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    page.truncate(n);
+    let returned = page.len();
+    (page, total, returned)
+}
+
+/// The default list row title cap — tighter than the compact-map cap (200):
+/// a list view needs enough title to pick which ids to GET, not the whole
+/// title. GET-by-id (and verbose=true) carry the full title.
+const SLIM_LIST_TITLE_MAX_CHARS: usize = 80;
+
+/// Shorten an RFC3339 timestamp to minute precision in UTC
+/// ("2026-10-24T13:43:50.507462938+00:00" → "2026-10-24T13:43Z"). The value
+/// is converted to UTC before formatting — a non-UTC offset is never
+/// mislabeled as Z. Non-parseable stamps pass through unchanged — never lie
+/// about time.
+fn short_timestamp(ts: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Utc)
+                .format("%Y-%m-%dT%H:%MZ")
+                .to_string()
+        })
+        .unwrap_or_else(|_| ts.to_string())
+}
+
+/// Project a mapped compact entity to the DEFAULT slim list row:
+/// `{id, title(≤80 with "…"), status, updated_at(minute-precision UTC)}`.
+/// Everything else — created_at, family metadata (consolidated/outcome/
+/// source), the long title — is GET-by-id territory or verbose=true.
+/// Omission with a documented shape is compact-by-design, not the lying
+/// class: no field is ever WRONG, and verbose=true restores the full row.
+fn slim_list_row(entity: Value) -> Value {
+    let mut slim = serde_json::Map::new();
+    if let Some(id) = entity.get("id") {
+        slim.insert("id".to_string(), id.clone());
+    }
+    if let Some(title) = entity.get("title").and_then(|t| t.as_str()) {
+        let count = title.chars().count();
+        let marked = if count > SLIM_LIST_TITLE_MAX_CHARS {
+            let cut: String = title.chars().take(SLIM_LIST_TITLE_MAX_CHARS).collect();
+            format!("{cut}…")
+        } else {
+            title.to_string()
+        };
+        slim.insert("title".to_string(), Value::String(marked));
+    }
+    if let Some(status) = entity.get("status") {
+        slim.insert("status".to_string(), status.clone());
+    }
+    if let Some(updated) = entity.get("updated_at").and_then(|t| t.as_str()) {
+        slim.insert(
+            "updated_at".to_string(),
+            Value::String(short_timestamp(updated)),
+        );
+    }
+    Value::Object(slim)
 }
 
 /// GET /api/v1/{slug}/{id} — get a single entity by ID
@@ -2561,6 +2657,176 @@ mod identity_content_tests {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+mod list_limit_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn entity_with_updated_at(id: &str, updated_at: &str) -> Value {
+        json!({"id": id, "title": format!("t-{id}"), "updated_at": updated_at})
+    }
+
+    #[test]
+    fn default_bound_applies_when_limit_unset() {
+        // The owner-measured pain: a naive list call must NEVER return an
+        // unbounded store. 25 entities, no limit param → 20 rows.
+        let entities: Vec<Value> = (0..25)
+            .map(|i| entity_with_updated_at(&format!("e{i}"), "2026-10-24T13:00:00Z"))
+            .collect();
+        let (page, total, returned) = apply_limit(entities, None);
+        assert_eq!(
+            total, 25,
+            "total is the TRUE store count, never the page count"
+        );
+        assert_eq!(
+            returned, DEFAULT_LIST_LIMIT,
+            "the default bound applies when limit is unset"
+        );
+        assert_eq!(page.len(), DEFAULT_LIST_LIMIT);
+    }
+
+    #[test]
+    fn limit_override_extends_the_bound() {
+        let entities: Vec<Value> = (0..25)
+            .map(|i| entity_with_updated_at(&format!("e{i}"), "2026-10-24T13:00:00Z"))
+            .collect();
+        let (page, total, returned) = apply_limit(entities, Some(25));
+        assert_eq!(total, 25);
+        assert_eq!(
+            returned, 25,
+            "a deliberate full inventory passes a larger limit"
+        );
+        assert_eq!(page.len(), 25);
+    }
+
+    #[test]
+    fn bounded_page_keeps_the_newest_rows() {
+        // Pre-sorted newest-first (the handler sorts before the cut).
+        let entities = vec![
+            entity_with_updated_at("newest", "2026-10-24T13:00:00Z"),
+            entity_with_updated_at("mid", "2026-10-24T12:00:00Z"),
+            entity_with_updated_at("oldest", "2026-10-24T11:00:00Z"),
+        ];
+        let (page, total, returned) = apply_limit(entities, Some(2));
+        assert_eq!(total, 3);
+        assert_eq!(returned, 2);
+        assert_eq!(
+            page[0]["id"], "newest",
+            "the bounded page keeps the NEWEST rows — the sort happens before the cut"
+        );
+    }
+
+    #[test]
+    fn limit_above_store_size_returns_everything() {
+        let entities = vec![entity_with_updated_at("a", "2026-10-24T13:00:00Z")];
+        let (page, total, returned) = apply_limit(entities, Some(50));
+        assert_eq!(total, 1);
+        assert_eq!(returned, 1);
+        assert_eq!(page.len(), 1, "limit above the store returns all rows");
+    }
+
+    #[test]
+    fn zero_limit_returns_empty_page_with_honest_total() {
+        let entities = vec![
+            entity_with_updated_at("a", "2026-10-24T13:00:00Z"),
+            entity_with_updated_at("b", "2026-10-24T12:00:00Z"),
+        ];
+        let (page, total, returned) = apply_limit(entities, Some(0));
+        assert_eq!(total, 2, "total stays true even on an empty page");
+        assert_eq!(returned, 0);
+        assert!(page.is_empty());
+    }
+}
+
+mod slim_row_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn full_row() -> Value {
+        json!({
+            "id": "mem-1",
+            "title": "a session title",
+            "status": "active",
+            "created_at": "2026-10-24T10:00:00.123456789+00:00",
+            "updated_at": "2026-10-24T13:43:50.507462938+00:00",
+            "consolidated": "false",
+            "outcome": "success",
+            "source": "agent-derived"
+        })
+    }
+
+    #[test]
+    fn slim_row_keeps_id_title_status_and_short_updated_at() {
+        let slim = slim_list_row(full_row());
+        assert_eq!(slim.get("id").and_then(|v| v.as_str()), Some("mem-1"));
+        assert_eq!(
+            slim.get("title").and_then(|v| v.as_str()),
+            Some("a session title")
+        );
+        assert_eq!(slim.get("status").and_then(|v| v.as_str()), Some("active"));
+        assert_eq!(
+            slim.get("updated_at").and_then(|v| v.as_str()),
+            Some("2026-10-24T13:43Z"),
+            "updated_at is minute-precision UTC — the freshness signal stays"
+        );
+    }
+
+    #[test]
+    fn slim_row_drops_created_at_and_family_metadata() {
+        let slim = slim_list_row(full_row());
+        assert!(
+            slim.get("created_at").is_none(),
+            "birth-stamps are GET territory"
+        );
+        assert!(slim.get("consolidated").is_none());
+        assert!(slim.get("outcome").is_none());
+        assert!(slim.get("source").is_none());
+    }
+
+    #[test]
+    fn slim_row_never_carries_content() {
+        let mut row = full_row();
+        row["content"] = json!("a full memory body");
+        let slim = slim_list_row(row);
+        assert!(
+            slim.get("content").is_none(),
+            "content is GET-by-id only, both shapes"
+        );
+    }
+
+    #[test]
+    fn slim_title_truncates_at_80_with_marker() {
+        let mut row = full_row();
+        row["title"] = json!("x".repeat(300));
+        let slim = slim_list_row(row);
+        let title = slim.get("title").and_then(|t| t.as_str()).unwrap();
+        assert_eq!(
+            title.chars().count(),
+            SLIM_LIST_TITLE_MAX_CHARS + 1,
+            "80 chars + the … marker — the cut is marked, never silent"
+        );
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn short_timestamp_converts_non_utc_to_utc() {
+        // +03:00 offset: 16:43 local == 13:43 UTC — the Z label must be true.
+        assert_eq!(
+            short_timestamp("2026-10-24T16:43:50.507462938+03:00"),
+            "2026-10-24T13:43Z",
+            "a non-UTC offset is converted, never mislabeled"
+        );
+    }
+
+    #[test]
+    fn short_timestamp_passes_malformed_through_unchanged() {
+        assert_eq!(
+            short_timestamp("not-a-timestamp"),
+            "not-a-timestamp",
+            "never lie about time — unparseable stays verbatim"
+        );
+    }
+}
+
 mod search_pagination_tests {
     //! Cursor pagination: search_by_tag_paged walks PDT's keyset cursor
     //! until the store is exhausted — no bounded window, no silent eviction

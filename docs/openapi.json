@@ -1,0 +1,909 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Fame — Facade for Agent Memory",
+    "description": "Memory facade over PDT. Provides semantic, episodic, and procedural memory per agent.\n\nAgent identity is passed via X-Instance-Id header (injected by Aether). The agent never sees or passes agent_id — the URL path to Fame (https://fame.example.com/{agent_id}/sse) tells Aether which agent to route to, and Aether injects X-Instance-Id.",
+    "contact": {
+      "name": "Podtan Team"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/episodic-memorys": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "list_episodic-memorys",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            }
+          },
+          {
+            "name": "attached_to",
+            "in": "query",
+            "description": "Filter by relation target (e.g. project ID)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows returned. DEFAULT 20 (newest-first by updated_at) — a naive list call can never flood a context. Response always carries the true total + returned. Pass a larger limit (e.g. 10000) for a deliberate full inventory.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "verbose",
+            "in": "query",
+            "description": "Full list rows: 200-char title, created_at, family metadata (consolidated/outcome/source), full-precision updated_at. Default false = slim rows (id, title <=80, status, updated_at minute-precision UTC). Full content is GET-by-id only in both shapes.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of episodic-memorys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Episodic MemoryListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "create_episodic-memory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEpisodic MemoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Episodic Memory created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Episodic Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/episodic-memorys/{id}": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "get_episodic-memory",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Episodic Memory details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Episodic Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/episodic-memorys/{id}/status": {
+      "patch": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "update_episodic-memory_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "archived"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Episodic Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/procedural-memorys": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "list_procedural-memorys",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            }
+          },
+          {
+            "name": "attached_to",
+            "in": "query",
+            "description": "Filter by relation target (e.g. project ID)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows returned. DEFAULT 20 (newest-first by updated_at) — a naive list call can never flood a context. Response always carries the true total + returned. Pass a larger limit (e.g. 10000) for a deliberate full inventory.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "verbose",
+            "in": "query",
+            "description": "Full list rows: 200-char title, created_at, family metadata (consolidated/outcome/source), full-precision updated_at. Default false = slim rows (id, title <=80, status, updated_at minute-precision UTC). Full content is GET-by-id only in both shapes.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of procedural-memorys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Procedural MemoryListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "create_procedural-memory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProcedural MemoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Procedural Memory created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Procedural Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/procedural-memorys/{id}": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "get_procedural-memory",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Procedural Memory details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Procedural Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/procedural-memorys/{id}/status": {
+      "patch": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "update_procedural-memory_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "archived"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Procedural Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/semantic-memorys": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "list_semantic-memorys",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            }
+          },
+          {
+            "name": "attached_to",
+            "in": "query",
+            "description": "Filter by relation target (e.g. project ID)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows returned. DEFAULT 20 (newest-first by updated_at) — a naive list call can never flood a context. Response always carries the true total + returned. Pass a larger limit (e.g. 10000) for a deliberate full inventory.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "verbose",
+            "in": "query",
+            "description": "Full list rows: 200-char title, created_at, family metadata (consolidated/outcome/source), full-precision updated_at. Default false = slim rows (id, title <=80, status, updated_at minute-precision UTC). Full content is GET-by-id only in both shapes.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of semantic-memorys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Semantic MemoryListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "create_semantic-memory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSemantic MemoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Semantic Memory created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Semantic Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/semantic-memorys/{id}": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "get_semantic-memory",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Semantic Memory details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Semantic Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/semantic-memorys/{id}/status": {
+      "patch": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "update_semantic-memory_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "archived"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Semantic Memory"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateEpisodic MemoryRequest": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "consolidated": {
+            "type": "string",
+            "enum": [
+              "true",
+              "false"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "array"
+          },
+          "duration_mins": {
+            "type": "object"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure",
+              "partial"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateProcedural MemoryRequest": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "array"
+          },
+          "execution_count": {
+            "type": "object"
+          },
+          "pending_update": {
+            "type": "string",
+            "enum": [
+              "true",
+              "false"
+            ]
+          },
+          "role": {
+            "type": "array"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "seed",
+              "agent-created",
+              "episode-evolved"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "success_rate": {
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "object"
+          }
+        }
+      },
+      "CreateSemantic MemoryRequest": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "object"
+          },
+          "content": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "array"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agent-derived",
+              "human",
+              "episode-consolidated"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "Episodic Memory": {
+        "type": "object",
+        "required": [
+          "title",
+          "id"
+        ],
+        "properties": {
+          "consolidated": {
+            "type": "string",
+            "enum": [
+              "true",
+              "false"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "array"
+          },
+          "duration_mins": {
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure",
+              "partial"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "Episodic MemoryListResponse": {
+        "type": "object",
+        "required": [
+          "entities",
+          "total",
+          "returned"
+        ],
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Episodic Memory"
+            }
+          },
+          "returned": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "Procedural Memory": {
+        "type": "object",
+        "required": [
+          "title",
+          "id"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "array"
+          },
+          "execution_count": {
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pending_update": {
+            "type": "string",
+            "enum": [
+              "true",
+              "false"
+            ]
+          },
+          "role": {
+            "type": "array"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "seed",
+              "agent-created",
+              "episode-evolved"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "success_rate": {
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": "object"
+          }
+        }
+      },
+      "Procedural MemoryListResponse": {
+        "type": "object",
+        "required": [
+          "entities",
+          "total",
+          "returned"
+        ],
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Procedural Memory"
+            }
+          },
+          "returned": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "Semantic Memory": {
+        "type": "object",
+        "required": [
+          "title",
+          "id"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "object"
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agent-derived",
+              "human",
+              "episode-consolidated"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "Semantic MemoryListResponse": {
+        "type": "object",
+        "required": [
+          "entities",
+          "total",
+          "returned"
+        ],
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Semantic Memory"
+            }
+          },
+          "returned": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "agent-identity",
+      "description": "Agent self-model — who the agent is, values, goals, growth"
+    },
+    {
+      "name": "semantic-memory",
+      "description": "Long-term facts and knowledge"
+    },
+    {
+      "name": "episodic-memory",
+      "description": "Specific events and experiences"
+    },
+    {
+      "name": "procedural-memory",
+      "description": "How-to procedures and skills"
+    }
+  ]
+}
