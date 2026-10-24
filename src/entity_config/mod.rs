@@ -95,7 +95,7 @@ pub fn slug_to_cedar_type(slug: &str) -> String {
 }
 
 /// Cedar authorization action names for this entity.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct CedarActions {
     #[serde(default)]
     pub action_create: Option<String>,
@@ -107,21 +107,12 @@ pub struct CedarActions {
     pub action_delete: Option<String>,
 }
 
-impl Default for CedarActions {
-    fn default() -> Self {
-        Self {
-            action_create: None,
-            action_read: None,
-            action_edit: None,
-            action_delete: None,
-        }
-    }
-}
-
 /// Supported field types in entity configs.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum FieldType {
+    #[default]
     Text,
     Markdown,
     Enum,
@@ -129,12 +120,6 @@ pub enum FieldType {
     TagArray,
     Relation,
     Metadata,
-}
-
-impl Default for FieldType {
-    fn default() -> Self {
-        FieldType::Text
-    }
 }
 
 /// Per-field configuration.

@@ -326,7 +326,7 @@ async fn list_entities_inner(
     query: &ListEntitiesQuery,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let pdt = state.pdt.for_instance(instance_id);
-    let config = get_entity_config(state, &slug).ok_or_else(|| {
+    let config = get_entity_config(state, slug).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("Unknown entity type: {}", slug)})),
@@ -349,7 +349,7 @@ async fn list_entities_inner(
             .unwrap_or_default();
 
         // Filter by agent_id (X-Instance-Id) for per-agent memory isolation
-        let results: Vec<PdtSearchResult> = if let Some(ref agent_id) = instance_id {
+        let results: Vec<PdtSearchResult> = if let Some(agent_id) = instance_id {
             results
                 .into_iter()
                 .filter(|r| r.get_tag("agent") == Some(agent_id))
@@ -386,7 +386,7 @@ async fn list_entities_inner(
             .unwrap_or_default();
 
         // Filter by agent_id (X-Instance-Id) for per-agent memory isolation
-        let results: Vec<PdtSearchResult> = if let Some(ref agent_id) = instance_id {
+        let results: Vec<PdtSearchResult> = if let Some(agent_id) = instance_id {
             results
                 .into_iter()
                 .filter(|r| r.get_tag("agent") == Some(agent_id))
@@ -535,7 +535,7 @@ async fn get_entity_inner(
     id: &str,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let pdt = state.pdt.for_instance(instance_id);
-    let config = get_entity_config(state, &slug).ok_or_else(|| {
+    let config = get_entity_config(state, slug).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("Unknown entity type: {}", slug)})),
@@ -557,7 +557,7 @@ async fn get_entity_inner(
     }
 
     let asset = match pdt.fetch_asset(id, token).await {
-        AssetFetch::Found(asset) => asset,
+        AssetFetch::Found(asset) => *asset,
         AssetFetch::NotFound => {
             // Journal trail for absence: when a listed-but-unGETable record
             // appears (issue 0473c444), the next investigator starts from a
@@ -653,7 +653,7 @@ async fn create_entity_inner(
     workspace_admins: WorkspaceAdmins,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let pdt = state.pdt.for_instance(instance_id);
-    let config = get_entity_config(state, &slug).ok_or_else(|| {
+    let config = get_entity_config(state, slug).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("Unknown entity type: {}", slug)})),
@@ -1262,7 +1262,7 @@ async fn update_entity_status_inner(
     body: Value,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let pdt = state.pdt.for_instance(instance_id);
-    let config = get_entity_config(state, &slug).ok_or_else(|| {
+    let config = get_entity_config(state, slug).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("Unknown entity type: {}", slug)})),
@@ -1406,7 +1406,7 @@ async fn update_identity_content_inner(
     // or decode failure is not "not found" (issue 0473c444 lesson; the
     // failure is logged loudly at the fetch choke point).
     let asset = match pdt.fetch_asset(id, token).await {
-        AssetFetch::Found(asset) => asset,
+        AssetFetch::Found(asset) => *asset,
         AssetFetch::NotFound => {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -1694,7 +1694,7 @@ pub async fn list_entity_configs(State(state): State<AppState>) -> Json<Value> {
                         "in_views": fc.in_views,
                     })
                 }).collect::<Vec<_>>(),
-                "views": c.views.iter().map(|(_name, vc)| {
+                "views": c.views.values().map(|vc| {
                     json!({
                         "layout": vc.layout,
                         "fields": vc.fields,

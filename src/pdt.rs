@@ -113,7 +113,7 @@ pub struct PdtAsset {
 /// mapped every fetch error to NOT_FOUND).
 #[derive(Debug)]
 pub enum AssetFetch {
-    Found(PdtAsset),
+    Found(Box<PdtAsset>),
     /// PDT answered 404 for this id — genuinely absent (or wrong instance).
     NotFound,
     /// Transport or decode failure — fame-side or PDT-side fault, NOT absence.
@@ -242,12 +242,12 @@ impl PdtClient {
         } else {
             b
         };
-        let b = if let Some(id) = instance_id {
+
+        if let Some(id) = instance_id {
             b.header("X-Instance-Id", id)
         } else {
             b
-        };
-        b
+        }
     }
 
     /// Create an instance-scoped view of this client.
@@ -386,7 +386,7 @@ impl PdtClient {
         instance_id: Option<&str>,
     ) -> AssetFetch {
         match self.get_asset_instance(id, token, instance_id).await {
-            Ok(asset) => AssetFetch::Found(asset),
+            Ok(asset) => AssetFetch::Found(Box::new(asset)),
             Err(e) => {
                 let msg = e.to_string();
                 if msg.starts_with("PDT asset not found") {
@@ -852,7 +852,7 @@ impl<'a> InstancePdtClient<'a> {
         // opaque "error decoding response body", which misdirected the
         // 0473c444 investigation for a full round. (0.3.12)
         match self.fetch_asset(id, token).await {
-            AssetFetch::Found(asset) => Ok(asset),
+            AssetFetch::Found(asset) => Ok(*asset),
             AssetFetch::NotFound => anyhow::bail!("PDT asset not found (404): {id}"),
             AssetFetch::Failed(e) => Err(e),
         }
