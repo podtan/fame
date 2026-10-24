@@ -13,8 +13,16 @@ use pep::oidc::types::JwtClaims;
 ///
 /// Extends PEP's base entity builder with `role` and `groups` from extra claims
 /// (matching the NGHR schema's `User` entity).
-pub fn user_to_cedar_principal(claims: &JwtClaims) -> Entity {
-    let uid = build_principal_uid(claims).unwrap();
+///
+/// Returns `Err` instead of panicking (af35f475 class, fame-side pin): a panic
+/// inside the authz path crashes the request handler instead of answering a
+/// clean 5xx. Mirrors PEP's own `build_principal_entity` signature. With
+/// current pep the error legs are unreachable in practice (EntityId's
+/// FromStr is Infallible; RestrictedExpression attrs cannot fail) — the guard
+/// is the type itself: panic-by-construction is eliminated, and any future
+/// pep strictness change lands as a handled 500, not a crash.
+pub fn user_to_cedar_principal(claims: &JwtClaims) -> Result<Entity, pep::cedar::CedarError> {
+    let uid = build_principal_uid(claims)?;
     let mut attrs: HashMap<String, RestrictedExpression> = HashMap::new();
 
     // Email from JWT (for Cedar policies — principal has email required)
@@ -67,7 +75,12 @@ pub fn user_to_cedar_principal(claims: &JwtClaims) -> Entity {
         }
     }
 
-    Entity::new(uid, attrs, HashSet::new()).expect("Failed to build Cedar principal")
+    Entity::new(uid, attrs, HashSet::new()).map_err(|e| {
+        pep::cedar::CedarError::EntityBuildFailed(format!(
+            "principal entity build failed: {}",
+            e
+        ))
+    })
 }
 
 /// Build a Cedar EntityUid for a resource type and ID.

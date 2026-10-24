@@ -48,7 +48,10 @@ pub fn check_permission(
         })?;
 
     // Build principal entity with role/groups for attribute-based policies
-    let principal_entity = crate::cedar::entity::user_to_cedar_principal(claims);
+    let principal_entity = crate::cedar::entity::user_to_cedar_principal(claims).map_err(|e| {
+        tracing::error!("Cedar principal entity build failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let entities = Entities::from_entities([principal_entity], None).map_err(|e| {
         tracing::error!("Cedar entities build failed: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
@@ -142,7 +145,10 @@ pub fn check_permission_scoped(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let principal_entity = crate::cedar::entity::user_to_cedar_principal(claims);
+    let principal_entity = crate::cedar::entity::user_to_cedar_principal(claims).map_err(|e| {
+        tracing::error!("Cedar principal entity build failed: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let attrs: std::collections::HashMap<String, RestrictedExpression> = resource_attrs
         .iter()
@@ -236,6 +242,23 @@ mod tests {
             }),
         };
         user.to_cedar_claims()
+    }
+
+    /// af35f475 class pin (fame side): the principal builder returns Result —
+    /// the authz path can never panic on principal construction. With current
+    /// pep the Err legs are unreachable in practice (EntityId's FromStr is
+    /// Infallible), so the guard is the signature itself; this test pins the
+    /// Ok path stays intact through the Result surface.
+    #[test]
+    fn principal_builder_returns_result_not_panic() {
+        let claims = claims_with_role(Some("admin"));
+        let entity = crate::cedar::entity::user_to_cedar_principal(&claims)
+            .expect("well-formed claims must build a principal entity");
+        assert!(
+            entity.uid().to_string().contains("user-admin"),
+            "principal uid must carry the claims sub, got {}",
+            entity.uid()
+        );
     }
 
     /// The gate: with the empty-namespace + attribute-role policy, Cedar must
