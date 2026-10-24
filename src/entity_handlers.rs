@@ -2737,6 +2737,7 @@ mod list_limit_tests {
     }
 }
 
+#[cfg(test)]
 mod slim_row_tests {
     use super::*;
     use serde_json::json;
@@ -2827,6 +2828,7 @@ mod slim_row_tests {
     }
 }
 
+#[cfg(test)]
 mod search_pagination_tests {
     //! Cursor pagination: search_by_tag_paged walks PDT's keyset cursor
     //! until the store is exhausted — no bounded window, no silent eviction
