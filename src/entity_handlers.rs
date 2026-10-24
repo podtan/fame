@@ -195,6 +195,25 @@ pub fn map_asset_to_entity(asset: &PdtAsset, config: &EntityConfig) -> Value {
 }
 
 /// Map a compact search result to an entity JSON object.
+/// Compact list mode (issue aed50913): one fame_list_episodic-memorys call
+/// measured 117,277 bytes / ~29K tokens on unbounded ledger titles —
+/// big-memory agents flood ~100K tokens per list call without reading a
+/// single memory. List views carry a TRUNCATED title (~200 chars, "…"
+/// marks the cut); the full title + content live only on GET by id. The
+/// cut is honest, never silent: the suffix tells the consumer it is a
+/// prefix, and the read surface is untouched.
+const LIST_TITLE_MAX_CHARS: usize = 200;
+
+fn compact_list_title(v: Value) -> Value {
+    match v {
+        Value::String(s) if s.chars().count() > LIST_TITLE_MAX_CHARS => {
+            let cut: String = s.chars().take(LIST_TITLE_MAX_CHARS).collect();
+            Value::String(format!("{cut}…"))
+        }
+        other => other,
+    }
+}
+
 pub fn map_compact_to_entity(result: &PdtSearchResult, config: &EntityConfig) -> Value {
     let mut entity = serde_json::Map::new();
 
@@ -211,6 +230,15 @@ pub fn map_compact_to_entity(result: &PdtSearchResult, config: &EntityConfig) ->
             },
         );
         if let Some(v) = v {
+            // Compact list mode (issue aed50913): the title is the only
+            // unbounded field list views project — truncate it here, in
+            // the LIST mapper only. GET by id (map_asset_to_entity) keeps
+            // the full title.
+            let v = if field_name == "title" {
+                compact_list_title(v)
+            } else {
+                v
+            };
             entity.insert(field_name.clone(), v);
         }
     }
@@ -872,7 +900,7 @@ mod status_lifecycle_tests {
     use super::*;
     use crate::pdt::{PdtAsset, PdtTagSummary};
 
-    fn memory_config() -> EntityConfig {
+    pub(crate) fn memory_config() -> EntityConfig {
         let toml_str = r#"
 [entity]
 name = "Episodic Memory"
@@ -906,7 +934,7 @@ in_views = ["list", "detail"]
             .entity
     }
 
-    fn compact_result(tags: Vec<PdtTagSummary>) -> PdtSearchResult {
+    pub(crate) fn compact_result(tags: Vec<PdtTagSummary>) -> PdtSearchResult {
         PdtSearchResult {
             id: "mem-1".to_string(),
             title: "Episode: test".to_string(),
@@ -1036,6 +1064,95 @@ in_views = ["list", "detail"]
         );
         assert!(matches(&archived, "archived"));
         assert!(!matches(&archived, "active"));
+    }
+}
+
+/// Compact list mode (issue aed50913): list views truncate the title at
+/// LIST_TITLE_MAX_CHARS with an honest "…" suffix; GET by id keeps the
+/// full title. Guards: the cut happens, short titles pass through
+/// untouched, the read surface is untouched, and multi-byte titles cut at
+/// char boundaries (never panic).
+#[cfg(test)]
+mod compact_list_tests {
+    use super::*;
+    use crate::pdt::PdtTagSummary;
+
+    #[test]
+    fn list_title_truncates_at_200_chars() {
+        let config = super::status_lifecycle_tests::memory_config();
+        let long_title = format!("Episode: {}", "x".repeat(2000));
+        let mut result = super::status_lifecycle_tests::compact_result(vec![PdtTagSummary {
+            category: "type".to_string(),
+            value: "agent-memory".to_string(),
+        }]);
+        result.title = long_title.clone();
+        let entity = map_compact_to_entity(&result, &config);
+        let title = entity.get("title").and_then(|t| t.as_str()).unwrap();
+        assert_eq!(
+            title.chars().count(),
+            LIST_TITLE_MAX_CHARS + 1,
+            "200 chars + the … marker — the list call stays bounded"
+        );
+        assert!(title.ends_with('…'), "the cut is marked, never silent");
+        assert_ne!(title, long_title, "the full title must NOT ride the list");
+    }
+
+    #[test]
+    fn list_title_short_titles_pass_through_untouched() {
+        let config = super::status_lifecycle_tests::memory_config();
+        let result = super::status_lifecycle_tests::compact_result(vec![PdtTagSummary {
+            category: "type".to_string(),
+            value: "agent-memory".to_string(),
+        }]);
+        let entity = map_compact_to_entity(&result, &config);
+        let title = entity.get("title").and_then(|t| t.as_str()).unwrap();
+        assert_eq!(title, "test", "title_suffix mapping intact");
+        assert!(!title.ends_with('…'), "no marker on an untruncated title");
+    }
+
+    #[test]
+    fn detail_view_keeps_full_title() {
+        let config = super::status_lifecycle_tests::memory_config();
+        let long_title = format!("Episode: {}", "x".repeat(2000));
+        let asset = PdtAsset {
+            id: "mem-9".to_string(),
+            title: long_title.clone(),
+            content: String::new(),
+            tags: vec![],
+            metadata: HashMap::new(),
+            created_at: "2026-10-20T00:00:00Z".to_string(),
+            updated_at: "2026-10-20T00:00:00Z".to_string(),
+            created_by: String::new(),
+            updated_by: String::new(),
+            deleted_at: None,
+            auth_context: None,
+        };
+        let entity = map_asset_to_entity(&asset, &config);
+        // title_suffix strips the "Episode: " prefix on BOTH mappers — the
+        // detail assertion is on the prefix-stripped FULL title (no cut).
+        assert_eq!(
+            entity.get("title").and_then(|t| t.as_str()),
+            Some("x".repeat(2000).as_str()),
+            "the read surface is untouched — full title only on GET by id"
+        );
+    }
+
+    #[test]
+    fn multibyte_titles_cut_at_char_boundary_never_panic() {
+        let config = super::status_lifecycle_tests::memory_config();
+        // Persian + emoji: byte length ≫ char count — a byte-slice cut
+        // would panic or corrupt; the char-boundary cut must not.
+        let long_title = format!("Episode: {}", "حافظ".repeat(400));
+        assert!(long_title.len() > LIST_TITLE_MAX_CHARS * 4);
+        let mut result = super::status_lifecycle_tests::compact_result(vec![PdtTagSummary {
+            category: "type".to_string(),
+            value: "agent-memory".to_string(),
+        }]);
+        result.title = long_title;
+        let entity = map_compact_to_entity(&result, &config);
+        let title = entity.get("title").and_then(|t| t.as_str()).unwrap();
+        assert_eq!(title.chars().count(), LIST_TITLE_MAX_CHARS + 1);
+        assert!(title.ends_with('…'));
     }
 }
 /// PATCH /api/v1/{slug}/{id}/status — update entity status

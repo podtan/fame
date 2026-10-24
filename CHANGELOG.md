@@ -5,6 +5,21 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-10-24
+
+### Fixed
+- List endpoints are **compact by default** (aed50913, owner-reported):
+  one `fame_list_episodic-memorys` call measured 117,277 bytes / ~29K
+  tokens on unbounded ledger titles — big-memory agents flooded ~100K
+  tokens per list call without reading a single memory. List views now
+  carry a **truncated title (200 chars, `…` marks the cut)**; the full
+  title + content live only on GET by id. The cut is honest, never
+  silent, and the read surface is untouched.
+  Guards: `list_title_truncates_at_200_chars`,
+  `list_title_short_titles_pass_through_untouched`,
+  `detail_view_keeps_full_title`,
+  `multibyte_titles_cut_at_char_boundary_never_panic`.
+
 ## [0.3.14] - 2026-10-20
 
 ### Fixed
