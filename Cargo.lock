@@ -1575,9 +1575,9 @@ dependencies = [
 
 [[package]]
 name = "pep"
-version = "0.5.3"
+version = "0.5.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c163ec4b75fd8835243e553e4b6f88c8669df49c27c8c5e01b86b502abb8a687"
+checksum = "aebb03aba64a8e517fa1b684c35ef8e402eb2a417ff5306833bc63d815897e0b"
 dependencies = [
  "anyhow",
  "axum",
