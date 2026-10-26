@@ -615,25 +615,65 @@ struct PdtResponse<T: Default> {
     data: Option<T>,
 }
 
+/// PDT error envelope — `{"code": "...", "message": "...", "request_id": "..."}`.
+///
+/// Recognized BEFORE the parse-error fallback so the REAL error (code +
+/// request_id — exactly what an operator needs) is never masked behind a
+/// serde "missing field `_id`" message. Both fields are required for the
+/// envelope interpretation: a valid success entity (PdtAsset requires `_id`,
+/// carries no `code`/`message`) can never match, so the success path is
+/// untouched. (563e18fa — during the 15:18Z incident this mask sent the
+/// diagnosis toward "PDT response shape changed" instead of the DB error.)
+#[derive(Debug, Deserialize)]
+struct PdtErrorEnvelope {
+    code: String,
+    message: String,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
 async fn parse_pdt_response<T: serde::de::DeserializeOwned + Default>(
     resp: reqwest::Response,
 ) -> Result<T> {
-    // Try direct deserialization first (PDT may return the object directly)
+    let status = resp.status();
     let bytes = resp.bytes().await?;
 
-    // First try: direct deserialization
+    // Success path first — byte-for-byte the pre-563e18fa behavior: direct
+    // deserialization (PDT may return the object directly), then { "data": ... }.
     if let Ok(val) = serde_json::from_slice::<T>(&bytes) {
         return Ok(val);
     }
-
-    // Second try: wrapped in { "data": ... }
     if let Ok(wrapped) = serde_json::from_slice::<PdtResponse<T>>(&bytes) {
         if let Some(data) = wrapped.data {
             return Ok(data);
         }
     }
 
-    // If both fail, try direct one more time with better error
+    // Entity parse failed — discriminate the failure honestly, in order:
+    // 1. A PDT error envelope surfaces code + status + message + request_id.
+    if let Ok(env) = serde_json::from_slice::<PdtErrorEnvelope>(&bytes) {
+        anyhow::bail!(
+            "PDT error {} ({}): {}{}",
+            env.code,
+            status,
+            env.message,
+            env.request_id
+                .as_deref()
+                .map(|rid| format!(" (request_id {rid})"))
+                .unwrap_or_default()
+        );
+    }
+    // 2. A non-success status without a recognized envelope fails loud with
+    //    the status + body — never a parse-error mask.
+    if !status.is_success() {
+        anyhow::bail!(
+            "PDT request failed ({}): {}",
+            status,
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+    // 3. A 2xx body that is neither a valid entity nor an error envelope:
+    //    the parse error, with the body attached for diagnosis.
     serde_json::from_slice::<T>(&bytes).map_err(|e| {
         anyhow::anyhow!(
             "Failed to parse PDT response: {} | body: {}",
@@ -1052,5 +1092,102 @@ mod pdt_asset_decode_tolerance {
         );
         let r: Result<PdtAsset, _> = serde_json::from_str(&payload);
         assert!(r.is_err(), "wrong-typed auth_context must not decode");
+    }
+}
+
+#[cfg(test)]
+mod pdt_error_envelope_guard {
+    //! Issue 563e18fa: a PDT error envelope ({"code","message","request_id"})
+    //! must surface as the REAL error — code + status + message + request_id —
+    //! never masked behind a serde "missing field `_id`" parse error. During
+    //! the 2026-10-26 15:18Z incident (baktan WAL-ownership write-fail window)
+    //! the mask sent diagnosis toward "PDT response shape changed" instead of
+    //! the DB failure. These pin the honest-failure contract for every
+    //! parse_pdt_response call site (8 sites, write paths included).
+    use super::{parse_pdt_response, PdtAsset};
+
+    fn response(status: u16, body: &str) -> reqwest::Response {
+        reqwest::Response::from(
+            http::Response::builder()
+                .status(status)
+                .body(body.as_bytes().to_vec())
+                .unwrap(),
+        )
+    }
+
+    const DATABASE_ERROR_ENVELOPE: &str = r#"{"code":"DATABASE_ERROR","message":"A database error occurred","request_id":"970bc743-f24c-4ad8-b7f9-2ae154b8585c"}"#;
+
+    #[tokio::test]
+    async fn error_envelope_surfaces_code_status_message_request_id() {
+        let err = parse_pdt_response::<PdtAsset>(response(500, DATABASE_ERROR_ENVELOPE))
+            .await
+            .expect_err("error envelope must not decode as an entity");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("DATABASE_ERROR"),
+            "real code surfaced, got: {msg}"
+        );
+        assert!(
+            msg.contains("A database error occurred"),
+            "real message surfaced, got: {msg}"
+        );
+        assert!(
+            msg.contains("970bc743-f24c-4ad8-b7f9-2ae154b8585c"),
+            "request_id surfaced, got: {msg}"
+        );
+        assert!(msg.contains("500"), "status surfaced, got: {msg}");
+        assert!(
+            !msg.contains("missing field"),
+            "parse mask gone, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_envelope_on_2xx_still_surfaces_the_real_error() {
+        // Defensive rider (563e18fa #2): envelope recognition never depends
+        // on success-entity fields OR the status — a 2xx body that IS an
+        // error envelope is still an error, honestly surfaced.
+        let err = parse_pdt_response::<PdtAsset>(response(200, DATABASE_ERROR_ENVELOPE))
+            .await
+            .expect_err("envelope on 2xx must not decode as an entity");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("DATABASE_ERROR"),
+            "real code surfaced, got: {msg}"
+        );
+        assert!(
+            !msg.contains("missing field"),
+            "parse mask gone, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn valid_asset_still_decodes() {
+        // Success path unchanged: only _id is required on PdtAsset.
+        let asset = parse_pdt_response::<PdtAsset>(response(200, r#"{"_id":"x"}"#))
+            .await
+            .expect("valid asset decodes");
+        assert_eq!(asset.id, "x");
+    }
+
+    #[tokio::test]
+    async fn wrapped_data_still_decodes() {
+        let asset = parse_pdt_response::<PdtAsset>(response(200, r#"{"data":{"_id":"y"}}"#))
+            .await
+            .expect("wrapped asset decodes");
+        assert_eq!(asset.id, "y");
+    }
+
+    #[tokio::test]
+    async fn non_success_without_envelope_fails_loud_with_status() {
+        let err = parse_pdt_response::<PdtAsset>(response(502, "<html>bad gateway</html>"))
+            .await
+            .expect_err("non-success must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("502"), "status surfaced, got: {msg}");
+        assert!(
+            !msg.contains("missing field"),
+            "parse mask gone, got: {msg}"
+        );
     }
 }

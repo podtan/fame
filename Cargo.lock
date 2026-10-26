@@ -613,6 +613,7 @@ dependencies = [
  "chrono",
  "figment",
  "futures",
+ "http",
  "pep",
  "reqwest",
  "serde",

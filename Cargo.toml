@@ -34,3 +34,8 @@ futures = "0.3"
 
 # Content hashing (identity content updates echo old→new sha256)
 sha2 = "0.10"
+
+[dev-dependencies]
+# Test-only: construct real reqwest::Response values for the parse-layer
+# guard (563e18fa). Already in the tree transitively via reqwest — zero new crates.
+http = "1"
