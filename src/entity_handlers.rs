@@ -1737,7 +1737,7 @@ mod identity_content_tests {
     use super::*;
     use crate::pdt::{CreateAssetRequest, CreateTagRequest, PdtClient};
     use axum::response::IntoResponse;
-    use axum::routing::{get, post, put};
+    use axum::routing::{get, post};
     use std::process::{Child, Command, Stdio};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
@@ -2129,7 +2129,6 @@ mod identity_content_tests {
     struct TestEnv {
         state: AppState,
         base: String,
-        ws: String,
         agent: String,
         identity_id: String,
         _proc: Option<PdtProc>,
@@ -2245,7 +2244,6 @@ mod identity_content_tests {
         TestEnv {
             state,
             base,
-            ws,
             agent,
             identity_id: identity.id,
             _proc: proc,
@@ -2613,7 +2611,6 @@ mod identity_content_tests {
     async fn agent_role_creates_missing_identity_allowed() {
         let env = test_env().await;
         let report_instance = uuid::Uuid::new_v4().to_string();
-        let new_id = uuid::Uuid::new_v4().to_string();
         let resp = create_entity_inner(
             &env.state,
             &user_with("agent", &[]),
@@ -2635,7 +2632,6 @@ mod identity_content_tests {
     async fn service_role_creates_missing_identity_allowed() {
         let env = test_env().await;
         let report_instance = uuid::Uuid::new_v4().to_string();
-        let new_id = uuid::Uuid::new_v4().to_string();
         let resp = create_entity_inner(
             &env.state,
             &user_with("service", &[]),

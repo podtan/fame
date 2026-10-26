@@ -12,98 +12,6 @@ use utoipa::OpenApi as OpenApiDerive;
 
 use crate::entity_config::{EntityConfig, FieldType};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::entity_config::EntityFile;
-
-    /// The three memory entity configs, loaded the same way main.rs loads them.
-    fn test_configs() -> Vec<Arc<EntityConfig>> {
-        [
-            include_str!("../entities/episodic.toml"),
-            include_str!("../entities/procedural.toml"),
-            include_str!("../entities/semantic.toml"),
-        ]
-        .iter()
-        .map(|src| {
-            let file: EntityFile = toml::from_str(src).unwrap();
-            Arc::new(file.entity)
-        })
-        .collect()
-    }
-
-    /// The served spec must carry the list-bound surface: limit + verbose
-    /// params on every config-driven list route, `returned` in every
-    /// ListResponse schema. Also dumps docs/openapi.json — the versioned
-    /// artifact Paydar syncs into the aether configs (both copies) at
-    /// deploy; a code change that moves the spec shows up as this file's
-    /// diff in review.
-    #[test]
-    fn generated_spec_carries_list_bound_surface() {
-        let configs = test_configs();
-
-        let api = generate_merged_openapi(&configs);
-        let spec: Value = serde_json::to_value(&api).unwrap();
-
-        // The three memory list routes exist and carry limit + verbose.
-        for slug in ["episodic-memorys", "procedural-memorys", "semantic-memorys"] {
-            let path = format!("/api/v1/{slug}");
-            let get = spec["paths"]
-                .get(&path)
-                .and_then(|p| p.get("get"))
-                .unwrap_or_else(|| panic!("{path}: list route missing from spec"));
-            let params = get["parameters"].as_array().unwrap();
-            let names: Vec<&str> = params.iter().filter_map(|p| p["name"].as_str()).collect();
-            assert!(names.contains(&"limit"), "{path}: limit param missing");
-            assert!(names.contains(&"verbose"), "{path}: verbose param missing");
-        }
-
-        // Every generated ListResponse schema carries returned.
-        let schemas = spec["components"]["schemas"].as_object().unwrap();
-        let list_schemas: Vec<(&String, &Value)> = schemas
-            .iter()
-            .filter(|(_, s)| {
-                s.get("properties")
-                    .and_then(|p| p.get("entities"))
-                    .is_some()
-            })
-            .collect();
-        assert_eq!(
-            list_schemas.len(),
-            3,
-            "three ListResponse schemas expected (one per memory family)"
-        );
-        for (name, s) in list_schemas {
-            assert!(
-                s["properties"].get("returned").is_some(),
-                "{name}: ListResponse schema missing returned"
-            );
-        }
-
-        // Dump the versioned artifact for the aether sync.
-        std::fs::create_dir_all("docs").unwrap();
-        std::fs::write(
-            "docs/openapi.json",
-            serde_json::to_string_pretty(&spec).unwrap(),
-        )
-        .unwrap();
-    }
-
-    /// The served spec's info.version must equal the crate version — a static
-    /// stamp hides spec staleness (05ee9d60 class): aether once bundled a
-    /// stale fame spec while the served version claimed nothing had moved.
-    #[test]
-    fn served_spec_version_matches_crate() {
-        let api = generate_merged_openapi(&test_configs());
-        let spec: Value = serde_json::to_value(&api).unwrap();
-        assert_eq!(
-            spec["info"]["version"].as_str(),
-            Some(env!("CARGO_PKG_VERSION")),
-            "served spec version must derive from the crate version, not a static stamp"
-        );
-    }
-}
-
 /// Generate a merged OpenAPI spec: the existing utoipa [`ApiDoc`] paths/schemas
 /// plus dynamically generated paths/schemas for all config-driven entities.
 ///
@@ -538,5 +446,97 @@ fn ensure_required_recursive(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_config::EntityFile;
+
+    /// The three memory entity configs, loaded the same way main.rs loads them.
+    fn test_configs() -> Vec<Arc<EntityConfig>> {
+        [
+            include_str!("../entities/episodic.toml"),
+            include_str!("../entities/procedural.toml"),
+            include_str!("../entities/semantic.toml"),
+        ]
+        .iter()
+        .map(|src| {
+            let file: EntityFile = toml::from_str(src).unwrap();
+            Arc::new(file.entity)
+        })
+        .collect()
+    }
+
+    /// The served spec must carry the list-bound surface: limit + verbose
+    /// params on every config-driven list route, `returned` in every
+    /// ListResponse schema. Also dumps docs/openapi.json — the versioned
+    /// artifact Paydar syncs into the aether configs (both copies) at
+    /// deploy; a code change that moves the spec shows up as this file's
+    /// diff in review.
+    #[test]
+    fn generated_spec_carries_list_bound_surface() {
+        let configs = test_configs();
+
+        let api = generate_merged_openapi(&configs);
+        let spec: Value = serde_json::to_value(&api).unwrap();
+
+        // The three memory list routes exist and carry limit + verbose.
+        for slug in ["episodic-memorys", "procedural-memorys", "semantic-memorys"] {
+            let path = format!("/api/v1/{slug}");
+            let get = spec["paths"]
+                .get(&path)
+                .and_then(|p| p.get("get"))
+                .unwrap_or_else(|| panic!("{path}: list route missing from spec"));
+            let params = get["parameters"].as_array().unwrap();
+            let names: Vec<&str> = params.iter().filter_map(|p| p["name"].as_str()).collect();
+            assert!(names.contains(&"limit"), "{path}: limit param missing");
+            assert!(names.contains(&"verbose"), "{path}: verbose param missing");
+        }
+
+        // Every generated ListResponse schema carries returned.
+        let schemas = spec["components"]["schemas"].as_object().unwrap();
+        let list_schemas: Vec<(&String, &Value)> = schemas
+            .iter()
+            .filter(|(_, s)| {
+                s.get("properties")
+                    .and_then(|p| p.get("entities"))
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(
+            list_schemas.len(),
+            3,
+            "three ListResponse schemas expected (one per memory family)"
+        );
+        for (name, s) in list_schemas {
+            assert!(
+                s["properties"].get("returned").is_some(),
+                "{name}: ListResponse schema missing returned"
+            );
+        }
+
+        // Dump the versioned artifact for the aether sync.
+        std::fs::create_dir_all("docs").unwrap();
+        std::fs::write(
+            "docs/openapi.json",
+            serde_json::to_string_pretty(&spec).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// The served spec's info.version must equal the crate version — a static
+    /// stamp hides spec staleness (05ee9d60 class): aether once bundled a
+    /// stale fame spec while the served version claimed nothing had moved.
+    #[test]
+    fn served_spec_version_matches_crate() {
+        let api = generate_merged_openapi(&test_configs());
+        let spec: Value = serde_json::to_value(&api).unwrap();
+        assert_eq!(
+            spec["info"]["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "served spec version must derive from the crate version, not a static stamp"
+        );
     }
 }

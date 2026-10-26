@@ -84,7 +84,6 @@ impl IntoResponse for AuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::HttpBody;
 
     /// b82a1925 guard-1 wire contract: enrichment failure answers
     /// 401 + WWW-Authenticate + machine-readable retryable body —
