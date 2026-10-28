@@ -5,6 +5,25 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2026-10-28
+
+### Fixed
+- PDT error envelopes are surfaced as REAL errors, never masked as
+  success entities (563e18fa): a PDT failure body
+  (`{"code", "message", "request_id"}`) previously tripped the serde
+  decode and surfaced as "missing field `_id`" — the real code, status,
+  message, and request_id were lost at the parse layer. The parse layer
+  now discriminates the error envelope (both fields required for the
+  interpretation; a valid success entity still decodes) and fails loud
+  with code + status + message + request_id. Guard:
+  `pdt_error_envelope_guard` (5 tests on real `reqwest::Response`s,
+  request_ids pinned from the 2026-10-26 baktan WAL window).
+
+### Dependencies
+- pep 0.5.13 → 0.5.15 (lock-only, owner-ordered 2026-10-28): range pin
+  `pep = "0.5"` unchanged; the lock adopts the two new patch releases.
+  Gate 5/5 green on the bumped tree (73/73).
+
 ## [0.3.16] - 2026-10-24
 
 ### Fixed
