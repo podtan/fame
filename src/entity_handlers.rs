@@ -2607,10 +2607,15 @@ mod identity_content_tests {
     /// Manager-agent bootstrap: role=agent may CREATE a missing identity in
     /// a report agent's home instance (charter provisioning, fame 0.3.2).
     /// This is the exact Farzan→Saman/Ravand/Bonyan charter flow.
+    /// Instance is the fixture's provisioned agent home: PDT 52ff15a
+    /// (44b13a5f CPO ruling) removed lazy workspace provisioning — the
+    /// request path never creates a database; only the explicit
+    /// provisioning path does. The IDENTITY is still missing (fresh asset),
+    /// which is what the role check exercises.
     #[tokio::test]
     async fn agent_role_creates_missing_identity_allowed() {
         let env = test_env().await;
-        let report_instance = uuid::Uuid::new_v4().to_string();
+        let report_instance = env.agent.clone();
         let resp = create_entity_inner(
             &env.state,
             &user_with("agent", &[]),
@@ -2628,10 +2633,12 @@ mod identity_content_tests {
 
     /// Tocpi's service principal may bootstrap identity content too
     /// (control-plane provisioning on behalf of the platform).
+    /// Instance is the fixture's provisioned agent home (see the agent-role
+    /// sibling: PDT 52ff15a removed lazy provisioning; identity stays fresh).
     #[tokio::test]
     async fn service_role_creates_missing_identity_allowed() {
         let env = test_env().await;
-        let report_instance = uuid::Uuid::new_v4().to_string();
+        let report_instance = env.agent.clone();
         let resp = create_entity_inner(
             &env.state,
             &user_with("service", &[]),
