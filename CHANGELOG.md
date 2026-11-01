@@ -5,6 +5,31 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.19] - 2026-11-01
+
+### Fixed
+- Identity status lifecycle born-broken (6315cbf6, CPO governance word
+  2026-11-01): `entities/identity.toml` declared NO status field while the
+  three memory tomls did — the `?status=` filter matched nothing for every
+  value (200-empty while a live identity GET-200s and shows in unfiltered
+  lists; 27 own-seat re-probes, reproduces on prod v0.3.17 AND v0.3.18).
+  The identity toml now declares the same status lifecycle as the memory
+  tomls (enum active/archived, default active, map tag:status); the
+  declared default fills absent status tags, so never-statused identities
+  project "active" — no backfill needed. Config-test guard extended to pin
+  all four entity configs (renamed test_entity_configs_declare_status_
+  lifecycle). Acceptance: ?status=active returns the live identities on
+  the raw store AND the MCP surface.
+- List limit=0 treated as unset (6dc65262, CPO governance word 2026-11-01,
+  branch RULED treat-as-unset — not 422): the zero arrives by the caller's
+  accidental null→0 coercion (paydar's 0740adf9 origin finding), not a
+  deliberate unbounded ask — 422 would punish the coerced caller for
+  another layer's bug. Some(0) now behaves exactly like None: the default
+  bound + the honest total. Guard updated: zero_limit_treated_as_unset_
+  default_bound_applies pins the branch (limit=0 ≡ unset; limit=1..N
+  unchanged; the total never lies). The origin fix (the coercion itself)
+  rides paydar's 0740adf9 track.
+
 ## [0.3.18] - 2026-11-01
 
 ### Dependencies

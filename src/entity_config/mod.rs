@@ -370,16 +370,20 @@ fields = ["title", "status", "content", "attached_to", "created_at", "updated_at
         assert_eq!(entity.default_status(), Some("draft"));
     }
 
-    /// The memory entity configs must declare the status lifecycle (issues
+    /// The entity configs must declare the status lifecycle (issues
     /// 80c2544e + 6abfa0b5: update_*_memory_status wrote a status tag nothing
-    /// ever projected and the ?status= filter matched nothing). Pins the
-    /// SHIPPED configs, not an inline sample.
+    /// ever projected and the ?status= filter matched nothing; issue
+    /// 6315cbf6: the identity toml declared NO status field at all — the
+    /// same 200-empty filter lie on the identity family, the 0.3.13 fix
+    /// covered memories only). Pins the SHIPPED configs, not an inline
+    /// sample.
     #[test]
-    fn test_memory_configs_declare_status_lifecycle() {
+    fn test_entity_configs_declare_status_lifecycle() {
         for (name, src) in [
             ("episodic", include_str!("../../entities/episodic.toml")),
             ("procedural", include_str!("../../entities/procedural.toml")),
             ("semantic", include_str!("../../entities/semantic.toml")),
+            ("identity", include_str!("../../entities/identity.toml")),
         ] {
             let file: EntityFile =
                 toml::from_str(src).unwrap_or_else(|e| panic!("{name}: parse failed: {e}"));

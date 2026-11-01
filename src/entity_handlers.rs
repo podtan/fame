@@ -467,7 +467,15 @@ const DEFAULT_LIST_LIMIT: usize = 20;
 fn apply_limit(entities: Vec<Value>, limit: Option<usize>) -> (Vec<Value>, usize, usize) {
     let total = entities.len();
     let mut page = entities;
-    let n = limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    // limit=0 is treated as UNSET (issue 6dc65262, CPO ruling 2026-11-01 —
+    // treat-as-unset, not 422): the zero arrives by the caller's accidental
+    // null→0 coercion, not a deliberate unbounded ask, and 422 would punish
+    // the coerced caller for another layer's bug. Some(0) behaves exactly
+    // like None: the default bound + the honest total. limit=1..N unchanged.
+    let n = match limit {
+        None | Some(0) => DEFAULT_LIST_LIMIT,
+        Some(n) => n,
+    };
     page.truncate(n);
     let returned = page.len();
     (page, total, returned)
@@ -2728,15 +2736,22 @@ mod list_limit_tests {
     }
 
     #[test]
-    fn zero_limit_returns_empty_page_with_honest_total() {
-        let entities = vec![
-            entity_with_updated_at("a", "2026-10-24T13:00:00Z"),
-            entity_with_updated_at("b", "2026-10-24T12:00:00Z"),
-        ];
+    fn zero_limit_treated_as_unset_default_bound_applies() {
+        // Issue 6dc65262, CPO ruling 2026-11-01 (treat-as-unset, not 422):
+        // limit=0 arrives by the caller's accidental null→0 coercion —
+        // Some(0) behaves exactly like None: the default bound + the honest
+        // total. The old empty-page-with-total shape was the lying-absence
+        // tell (entities=[] with total>0); the branch pins it shut.
+        let entities: Vec<Value> = (0..25)
+            .map(|i| entity_with_updated_at(&format!("e{i}"), "2026-10-24T13:00:00Z"))
+            .collect();
         let (page, total, returned) = apply_limit(entities, Some(0));
-        assert_eq!(total, 2, "total stays true even on an empty page");
-        assert_eq!(returned, 0);
-        assert!(page.is_empty());
+        assert_eq!(total, 25, "the total never lies");
+        assert_eq!(
+            returned, DEFAULT_LIST_LIMIT,
+            "limit=0 ≡ unset: the default bound applies"
+        );
+        assert_eq!(page.len(), DEFAULT_LIST_LIMIT);
     }
 }
 

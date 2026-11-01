@@ -34,6 +34,14 @@ type = "text"
 map = "metadata:born_from"
 in_views = ["detail"]
 
+[entity.fields.status]
+type = "enum"
+values = ["active", "archived"]
+default = "active"
+map = "tag:status"
+badge = true
+in_views = ["list", "detail"]
+
 [entity.fields.created_at]
 type = "date"
 map = "created_at"
@@ -46,8 +54,8 @@ in_views = ["detail"]
 
 [entity.views.list]
 layout = "card"
-fields = ["title", "version", "updated_at"]
+fields = ["title", "status", "version", "updated_at"]
 
 [entity.views.detail]
 layout = "detail"
-fields = ["title", "content", "version", "born_from", "created_at", "updated_at"]
+fields = ["title", "status", "content", "version", "born_from", "created_at", "updated_at"]
