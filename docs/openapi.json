@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.3.17"
+    "version": "0.3.18"
   },
   "paths": {
     "/api/v1/episodic-memorys": {

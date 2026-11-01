@@ -5,6 +5,24 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] - 2026-11-01
+
+### Dependencies
+- pep 0.5.15 → 0.5.16 (lock-only, CPO assignment-of-record 2026-11-01
+  on 895cbcea): range pin `pep = "0.5"` unchanged; the lock adopts pep
+  0.5.16 — per-token issuer fallback bounded by the operator allowlist
+  (empty allowlist = byte-identical behavior). Unblocks the issuer
+  cut-over's estate arm: podai-issued tokens validate at fame once the
+  bumped build deploys. Gate 5/5 green on the bumped tree (73/73).
+
+### Fixed
+- Identity-bootstrap tests target the fixture's provisioned agent home
+  instance (fc10e25, hold-local 2026-10-31, rides this release): the PDT
+  ruling 52ff15a (lazy workspace provisioning removed) invalidated the
+  tests' prior assumption; the identity ASSET stays fresh/missing by
+  design. Test-only; production birth flow provisions explicitly
+  (64481e7b).
+
 ## [0.3.17] - 2026-10-28
 
 ### Fixed

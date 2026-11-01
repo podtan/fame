@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "fame"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "axum",
@@ -1576,9 +1576,9 @@ dependencies = [
 
 [[package]]
 name = "pep"
-version = "0.5.15"
+version = "0.5.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf34ee837a38f836de12fed904c5d904e571f3957fefb3a7911efb135491f428"
+checksum = "188c6200c03c20268d07840e66cb00e95b0b1e5f2ccf1e380fd79c3ef3837ce4"
 dependencies = [
  "anyhow",
  "axum",
