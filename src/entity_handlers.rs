@@ -1384,9 +1384,17 @@ async fn update_entity_status_inner(
 /// the anchor comes from the STORED asset metadata (admin_group), never from
 /// a caller header.
 ///
-/// Instance scoping is REQUIRED: identity assets live in the agent's nested
-/// DB (created via X-Instance-Id routing). A request without the header
-/// would silently look in the global DB — rejected with 400 instead.
+/// Instance resolution mirrors the GET route (7e8a57db; CPO word cb8f70e8,
+/// option a, 2026-11-02): the read path tolerates header absence —
+/// `for_instance(None)` reads the global store — so the write path must not
+/// 400/404 on a header the read never needed. Resolution order:
+/// 1. instance-scoped fetch (when the header is present);
+/// 2. on a scoped miss, unscoped fallback fetch;
+/// 3. write in place via the instance where the asset was FOUND.
+///
+/// True absence (both lanes miss) stays a loud 404 — never create-on-miss.
+/// The Cedar gate anchors on the FOUND asset's STORED admin_group metadata,
+/// never a caller header — the fallback cannot widen the isolation boundary.
 async fn update_identity_content_inner(
     state: &AppState,
     user: &AuthenticatedUser,
@@ -1396,13 +1404,6 @@ async fn update_identity_content_inner(
     id: &str,
     body: Value,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let instance_id = instance_id.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "X-Instance-Id header required: agent identity content                 updates are instance-scoped (the identity lives in the agent's nested DB)"})),
-        )
-    })?;
-    let pdt = state.pdt.for_instance(Some(instance_id));
     let config = get_entity_config(state, slug).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -1410,11 +1411,36 @@ async fn update_identity_content_inner(
         )
     })?;
 
-    // Loud 404 BEFORE authorization — but ONLY for true absence: a transport
-    // or decode failure is not "not found" (issue 0473c444 lesson; the
-    // failure is logged loudly at the fetch choke point).
-    let asset = match pdt.fetch_asset(id, token).await {
-        AssetFetch::Found(asset) => *asset,
+    // Asset resolution — scoped first, unscoped fallback (word cb8f70e8).
+    // With the header absent the first fetch IS the unscoped read, so a miss
+    // there is true absence — no second call. Transport/decode failures are
+    // NOT absence (0473c444) and surface as loud 500s on both lanes.
+    let scoped_pdt = state.pdt.for_instance(instance_id);
+    let (asset, resolved_instance) = match scoped_pdt.fetch_asset(id, token).await {
+        AssetFetch::Found(asset) => (*asset, instance_id.map(str::to_string)),
+        AssetFetch::NotFound if instance_id.is_some() => {
+            tracing::info!(
+                slug = %slug,
+                asset_id = %id,
+                instance = %instance_id.unwrap_or_default(),
+                "identity update: scoped fetch missed — unscoped fallback resolve"
+            );
+            match state.pdt.for_instance(None).fetch_asset(id, token).await {
+                AssetFetch::Found(asset) => (*asset, None),
+                AssetFetch::NotFound => {
+                    return Err((
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": format!("Agent identity not found: {id}")})),
+                    ))
+                }
+                AssetFetch::Failed(e) => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": e.to_string()})),
+                    ))
+                }
+            }
+        }
         AssetFetch::NotFound => {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -1428,6 +1454,7 @@ async fn update_identity_content_inner(
             ))
         }
     };
+    let pdt = state.pdt.for_instance(resolved_instance.as_deref());
 
     // Cedar authorization check — same slug-derived resource type and
     // workspace scoping as the status update: the anchor comes from the
@@ -1503,8 +1530,14 @@ async fn update_identity_content_inner(
         new_content.len()
     );
 
-    let mut entity =
-        map_asset_to_entity_with_relations(state, Some(instance_id), &asset, &config, token).await;
+    let mut entity = map_asset_to_entity_with_relations(
+        state,
+        resolved_instance.as_deref(),
+        &asset,
+        &config,
+        token,
+    )
+    .await;
     if let Some(obj) = entity.as_object_mut() {
         obj.insert(
             "content_hash".to_string(),
@@ -2139,6 +2172,11 @@ mod identity_content_tests {
         base: String,
         agent: String,
         identity_id: String,
+        /// True when the real-pdt tier is up (true nested-DB routing).
+        /// The mock tier is process-global: X-Instance-Id is ignored, so
+        /// nested-only absence is unrepresentable there — tier-conditional
+        /// assertions key off this.
+        real_tier: bool,
         _proc: Option<PdtProc>,
     }
 
@@ -2158,6 +2196,7 @@ mod identity_content_tests {
             }
         };
         let _ = tier;
+        let real_tier = proc.is_some();
 
         let http = reqwest::Client::new();
 
@@ -2254,6 +2293,7 @@ mod identity_content_tests {
             base,
             agent,
             identity_id: identity.id,
+            real_tier,
             _proc: proc,
         }
     }
@@ -2587,29 +2627,245 @@ mod identity_content_tests {
         assert_eq!(asset.content, "", "wipe stored as empty string");
     }
 
-    /// Missing instance header → loud 400: identity content is
-    /// instance-scoped; a global-DB lookup would silently miss.
+    /// Missing instance header → the unscoped fallback resolves (7e8a57db;
+    /// CPO word cb8f70e8, option a): the GET route tolerates header absence,
+    /// so the write path no longer 400s on it. Real tier: the seeded identity
+    /// lives ONLY in the nested instance DB, so the unscoped lane genuinely
+    /// misses → loud 404, never create-on-miss (fail-loud invariant, pinned
+    /// condition 2). Mock tier: the process-global store holds the asset, so
+    /// the unscoped resolve FINDS it and the write lands — the header-absent
+    /// arm of the word itself.
     #[tokio::test]
-    async fn missing_instance_header_is_loud_400() {
+    async fn missing_instance_header_unscoped_resolve() {
         let env = test_env().await;
-        let err = call(
+        let result = call(
             &env,
             &user_with("admin", &[]),
             None,
             &env.identity_id,
             body(NEW),
         )
+        .await;
+        if env.real_tier {
+            let err = result
+                .expect_err("nested-only identity + absent header → unscoped miss → loud 404");
+            assert_eq!(err.0, StatusCode::NOT_FOUND);
+            assert!(
+                err.1 .0["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Agent identity not found"),
+                "loud message: {}",
+                err.1 .0
+            );
+            // Never create-on-miss: still exactly ONE identity record.
+            let idents = env
+                .state
+                .pdt
+                .for_instance(Some(&env.agent))
+                .search_by_tag("type", "agent-identity", None)
+                .await
+                .unwrap();
+            assert_eq!(idents.len(), 1, "no identity record was created on miss");
+        } else {
+            let resp =
+                result.expect("mock tier: process-global store resolves the absent-header update");
+            assert_eq!(resp.0["content"], NEW, "unscoped resolve wrote in place");
+        }
+    }
+
+    /// FALLBACK-RESOLVE ACCEPTANCE (7e8a57db; word cb8f70e8, pinned
+    /// condition 3): an update whose instance header names a leaf that does
+    /// NOT hold the identity must not 404 while GET resolves it — the
+    /// scoped miss retries unscoped, the found asset authorizes via its
+    /// STORED admin_group, and the write lands in place via the instance
+    /// where the asset was found. The GET-200/UPDATE-404 divergence is gone.
+    #[tokio::test]
+    async fn wrong_instance_header_falls_back_and_writes() {
+        let env = test_env().await;
+        // Seed the identity in the GLOBAL store (metadata patch without the
+        // instance header): the shape where the header-tolerant GET resolves
+        // and the old header-required update could not.
+        let identity = env
+            .state
+            .pdt
+            .for_instance(None)
+            .create_asset(
+                CreateAssetRequest {
+                    title: "Identity: Global Charter".to_string(),
+                    content: Some(OLD.to_string()),
+                    tags: Some(vec![CreateTagRequest {
+                        category: "type".to_string(),
+                        value: "agent-identity".to_string(),
+                    }]),
+                    auth_context: None,
+                },
+                None,
+            )
+            .await
+            .expect("global seed");
+        let http = reqwest::Client::new();
+        let resp = http
+            .put(format!("{}/api/assets/{}", env.base, identity.id))
+            .json(&serde_json::json!({ "metadata": { "admin_group": ADMIN_GROUP } }))
+            .send()
+            .await
+            .expect("metadata patch");
+        assert!(resp.status().is_success(), "global metadata patch");
+
+        // WRONG instance header — a valid-but-different leaf. Real tier:
+        // provision it so the scoped fetch deterministically hits an
+        // existing-but-empty nested DB (the Roshan shape: wrong leaf, not
+        // an unprovisioned one). Mock tier: no tenant routing to provision.
+        let wrong_instance = uuid::Uuid::new_v4().to_string();
+        if env.real_tier {
+            let r = http
+                .post(format!(
+                    "{}/api/instances/{}/provision",
+                    env.base, wrong_instance
+                ))
+                .send()
+                .await
+                .expect("provision wrong-instance leaf");
+            assert!(r.status().is_success(), "wrong-instance provision");
+        }
+
+        let resp = call(
+            &env,
+            &user_with("user", &[ADMIN_GROUP]),
+            Some(&wrong_instance),
+            &identity.id,
+            body(NEW),
+        )
         .await
-        .expect_err("missing instance header must 400");
-        assert_eq!(err.0, StatusCode::BAD_REQUEST);
-        assert!(
-            err.1 .0["error"]
-                .as_str()
-                .unwrap()
-                .contains("X-Instance-Id header required"),
-            "loud message: {}",
-            err.1 .0
+        .expect("wrong-header update must resolve via the unscoped fallback");
+        assert_eq!(resp.0["content"], NEW, "content landed via fallback");
+        assert_eq!(
+            resp.0["content_hash"]["old"],
+            sha_hex(OLD),
+            "old hash echoes"
         );
+
+        // The write landed IN PLACE (global store) — no duplicate record.
+        let read = env
+            .state
+            .pdt
+            .for_instance(None)
+            .get_asset(&identity.id, None)
+            .await
+            .unwrap();
+        assert_eq!(read.content, NEW);
+    }
+
+    /// ISOLATION INVARIANT (word cb8f70e8, pinned condition 1): the fallback
+    /// path CANNOT widen the boundary — a caller outside the identity's
+    /// admin_group is denied by Cedar even when the fallback RESOLVES the
+    /// asset. The anchor is the STORED admin_group metadata, never a header.
+    #[tokio::test]
+    async fn fallback_path_cedar_gate_holds_cross_agent() {
+        let env = test_env().await;
+        let identity = env
+            .state
+            .pdt
+            .for_instance(None)
+            .create_asset(
+                CreateAssetRequest {
+                    title: "Identity: Global Charter".to_string(),
+                    content: Some(OLD.to_string()),
+                    tags: Some(vec![CreateTagRequest {
+                        category: "type".to_string(),
+                        value: "agent-identity".to_string(),
+                    }]),
+                    auth_context: None,
+                },
+                None,
+            )
+            .await
+            .expect("global seed");
+        let http = reqwest::Client::new();
+        let resp = http
+            .put(format!("{}/api/assets/{}", env.base, identity.id))
+            .json(&serde_json::json!({ "metadata": { "admin_group": ADMIN_GROUP } }))
+            .send()
+            .await
+            .expect("metadata patch");
+        assert!(resp.status().is_success(), "global metadata patch");
+
+        // Cross-agent caller + wrong instance header: the fallback RESOLVES
+        // the asset (both tiers), and Cedar must still deny the edit.
+        let wrong_instance = uuid::Uuid::new_v4().to_string();
+        let err = call(
+            &env,
+            &user_with("agent", &["mem-someoneelse"]),
+            Some(&wrong_instance),
+            &identity.id,
+            body("hijack via fallback"),
+        )
+        .await
+        .expect_err("fallback-found asset must still be Cedar-gated");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(err.1 .0["error"], "Access denied", "Cedar decision");
+        let read = env
+            .state
+            .pdt
+            .for_instance(None)
+            .get_asset(&identity.id, None)
+            .await
+            .unwrap();
+        assert_eq!(read.content, OLD, "denied write must not land");
+    }
+
+    /// Absent header + global-store identity: the unscoped resolve FINDS it
+    /// and the write lands — the header-absent arm of the word, exercised
+    /// deterministically on BOTH tiers (the old path 400'd here).
+    #[tokio::test]
+    async fn absent_header_global_identity_writes_unscoped() {
+        let env = test_env().await;
+        let identity = env
+            .state
+            .pdt
+            .for_instance(None)
+            .create_asset(
+                CreateAssetRequest {
+                    title: "Identity: Global Charter".to_string(),
+                    content: Some(OLD.to_string()),
+                    tags: Some(vec![CreateTagRequest {
+                        category: "type".to_string(),
+                        value: "agent-identity".to_string(),
+                    }]),
+                    auth_context: None,
+                },
+                None,
+            )
+            .await
+            .expect("global seed");
+        let http = reqwest::Client::new();
+        let resp = http
+            .put(format!("{}/api/assets/{}", env.base, identity.id))
+            .json(&serde_json::json!({ "metadata": { "admin_group": ADMIN_GROUP } }))
+            .send()
+            .await
+            .expect("metadata patch");
+        assert!(resp.status().is_success(), "global metadata patch");
+
+        let resp = call(
+            &env,
+            &user_with("user", &[ADMIN_GROUP]),
+            None,
+            &identity.id,
+            body(NEW),
+        )
+        .await
+        .expect("absent header resolves unscoped and writes");
+        assert_eq!(resp.0["content"], NEW);
+        let read = env
+            .state
+            .pdt
+            .for_instance(None)
+            .get_asset(&identity.id, None)
+            .await
+            .unwrap();
+        assert_eq!(read.content, NEW, "write landed in the global store");
     }
 
     /// Manager-agent bootstrap: role=agent may CREATE a missing identity in
