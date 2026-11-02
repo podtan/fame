@@ -456,10 +456,14 @@ mod tests {
 
     /// The three memory entity configs, loaded the same way main.rs loads them.
     fn test_configs() -> Vec<Arc<EntityConfig>> {
+        // The FULL served set (main.rs loads every toml in the entities dir;
+        // the artifact must match what's served — a dump from a subset
+        // silently drops routes from the versioned artifact, 05ee9d60 class).
         [
             include_str!("../entities/episodic.toml"),
             include_str!("../entities/procedural.toml"),
             include_str!("../entities/semantic.toml"),
+            include_str!("../entities/identity.toml"),
         ]
         .iter()
         .map(|src| {
@@ -507,8 +511,8 @@ mod tests {
             .collect();
         assert_eq!(
             list_schemas.len(),
-            3,
-            "three ListResponse schemas expected (one per memory family)"
+            4,
+            "four ListResponse schemas expected (three memory families + agent-identity)"
         );
         for (name, s) in list_schemas {
             assert!(
@@ -516,6 +520,31 @@ mod tests {
                 "{name}: ListResponse schema missing returned"
             );
         }
+
+        // The artifact must match what's served: the agent-identity content
+        // route carries X-Instance-Id OPTIONAL (b8aa906b mechanism C).
+        // Roshan's seat re-pulls this artifact into aether configs at
+        // re-bundle — an artifact without the route (or with required:true)
+        // re-locks the contract at the bridge (bundled-spec drift, 05ee9d60
+        // class): the served spec had the route, the synced artifact did not.
+        let content = spec["paths"]
+            .get("/api/v1/agent-identitys/{id}/content")
+            .and_then(|p| p.get("patch"))
+            .unwrap_or_else(|| {
+                panic!("agent-identity content route missing from the dumped artifact")
+            });
+        let content_params = content["parameters"].as_array().unwrap();
+        let xid = content_params
+            .iter()
+            .find(|p| p["name"] == "X-Instance-Id")
+            .unwrap_or_else(|| {
+                panic!("X-Instance-Id param missing from the artifact's content route")
+            });
+        assert_eq!(
+            xid["required"].as_bool(),
+            Some(false),
+            "X-Instance-Id must be optional in the artifact (b8aa906b mechanism C)"
+        );
 
         // Dump the versioned artifact for the aether sync.
         std::fs::create_dir_all("docs").unwrap();

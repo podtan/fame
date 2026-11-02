@@ -12,6 +12,259 @@
     "version": "0.3.20"
   },
   "paths": {
+    "/api/v1/agent-identitys": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "list_agent-identitys",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            }
+          },
+          {
+            "name": "attached_to",
+            "in": "query",
+            "description": "Filter by relation target (e.g. project ID)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows returned. DEFAULT 20 (newest-first by updated_at) — a naive list call can never flood a context. Response always carries the true total + returned. Pass a larger limit (e.g. 10000) for a deliberate full inventory.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "verbose",
+            "in": "query",
+            "description": "Full list rows: 200-char title, created_at, family metadata (consolidated/outcome/source), full-precision updated_at. Default false = slim rows (id, title <=80, status, updated_at minute-precision UTC). Full content is GET-by-id only in both shapes.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of agent-identitys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent IdentityListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "create_agent-identity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgent IdentityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Agent Identity created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent Identity"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-identitys/{id}": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "get_agent-identity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent Identity details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent Identity"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-identitys/{id}/content": {
+      "patch": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "update_agent-identity_content",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Instance-Id",
+            "in": "header",
+            "description": "Optional instance override — injected by Aether from the URL agent_id; omit it (the agent never passes agent_id). Identity content is instance-scoped (agent nested DB). A wrong value falls back to the identity's home instance, then unscoped (b8aa906b).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "content"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "New identity content (empty string = explicit wipe, logged)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Content updated in place (entity + old→new sha256 echo)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "content_hash": {
+                      "type": "object",
+                      "properties": {
+                        "new": {
+                          "type": "string"
+                        },
+                        "old": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or non-string content field"
+          },
+          "403": {
+            "description": "Cedar deny — principal outside the stored admin_group"
+          },
+          "404": {
+            "description": "Identity not found (never create-on-miss)"
+          }
+        }
+      }
+    },
+    "/api/v1/agent-identitys/{id}/status": {
+      "patch": {
+        "tags": [
+          "entities"
+        ],
+        "operationId": "update_agent-identity_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "archived"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent Identity"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/episodic-memorys": {
       "get": {
         "tags": [
@@ -528,6 +781,92 @@
   },
   "components": {
     "schemas": {
+      "Agent Identity": {
+        "type": "object",
+        "required": [
+          "title",
+          "id"
+        ],
+        "properties": {
+          "born_from": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": "object"
+          }
+        }
+      },
+      "Agent IdentityListResponse": {
+        "type": "object",
+        "required": [
+          "entities",
+          "total",
+          "returned"
+        ],
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent Identity"
+            }
+          },
+          "returned": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreateAgent IdentityRequest": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "born_from": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "object"
+          }
+        }
+      },
       "CreateEpisodic MemoryRequest": {
         "type": "object",
         "required": [
