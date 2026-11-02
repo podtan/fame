@@ -5,6 +5,41 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.20] - 2026-11-02
+
+### Added
+- Server-resolved authz for charter management (3ad59ed3, CPO work order
+  2026-11-02 — the resolve_instance_authz equivalent, PDT Phase 1b
+  pattern): charter-shaped checks (the resource carries the admin_group
+  anchor) resolve the caller's PDT-native group names via
+  `GET /api/groups/member/{sub}` and UNION them with the token's groups
+  claim into the principal entity's `groups` attribute (deduped + sorted).
+  The drain (bf70097a) stops the token's groups claim — the resolved set
+  carries `principal.groups`; with the claim present the union is a
+  superset of the claims-only behavior (no regression). Resolve failure
+  degrades to the token groups (never zero while either source has
+  material — union semantics); with both sources empty the policies deny
+  fail-closed. Policies and schema UNCHANGED (no schema-change risk to
+  the validate_on_load boot path); memory paths pass no resolved set (no
+  wire call, identical behavior). Acceptance: charter tests pass with an
+  EMPTY groups claim (cedar_charter_server_resolved_groups); no
+  regression with the claim present.
+
+### Fixed
+- Identity-update instance resolution (7e8a57db, CPO governance word
+  cb8f70e8 option a): `update_identity_content_inner` no longer
+  hard-requires `X-Instance-Id` — scoped fetch first, on a scoped miss
+  unscoped fallback, write in place via the instance where the asset was
+  FOUND; true absence (both lanes miss) stays a loud 404, never
+  create-on-miss; the 400-on-absent-header is gone (the write path
+  mirrors the GET route's tolerance). The Cedar gate anchors on the found
+  asset's stored admin_group metadata — unchanged, runs on both paths.
+  Three pinned invariants regression-tested on BOTH tiers: isolation
+  (cross-agent caller denied 403 even when the fallback resolves; write
+  does not land), fail-loud (nested-only identity + absent header → loud
+  404, zero duplicates), acceptance (wrong-instance-header update of a
+  global-store identity resolves via fallback and lands in place).
+
 ## [0.3.19] - 2026-11-01
 
 ### Fixed
