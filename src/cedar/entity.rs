@@ -9,19 +9,27 @@ use std::collections::{HashMap, HashSet};
 use pep::cedar::build_principal_uid;
 use pep::oidc::types::JwtClaims;
 
-/// Build a Cedar principal Entity from JWT claims with role and groups.
+/// Build a Cedar principal Entity from JWT claims UNION server-resolved
+/// PDT-native groups (3ad59ed3 — the resolve_instance_authz equivalent,
+/// PDT Phase 1b pattern).
 ///
-/// Extends PEP's base entity builder with `role` and `groups` from extra claims
-/// (matching the NGHR schema's `User` entity).
+/// The token's `groups` claim and the PDT-resolved set UNION into the
+/// principal's `groups` attribute (deduped + sorted for deterministic
+/// entity bytes). The drain (bf70097a) stops the token's groups claim and
+/// the resolved set carries `principal.groups`; with the claim present the
+/// union is a superset of today's claims-only behavior (no regression).
+/// Resolve failures degrade to the token groups at the CALL SITE (never
+/// zero while either source has material — union semantics, 147a17fc).
 ///
-/// Returns `Err` instead of panicking (af35f475 class, fame-side pin): a panic
-/// inside the authz path crashes the request handler instead of answering a
-/// clean 5xx. Mirrors PEP's own `build_principal_entity` signature. With
-/// current pep the error legs are unreachable in practice (EntityId's
-/// FromStr is Infallible; RestrictedExpression attrs cannot fail) — the guard
-/// is the type itself: panic-by-construction is eliminated, and any future
-/// pep strictness change lands as a handled 500, not a crash.
-pub fn user_to_cedar_principal(claims: &JwtClaims) -> Result<Entity, pep::cedar::CedarError> {
+/// Returns `Err` instead of panicking (af35f475 class, fame-side pin): a
+/// panic inside the authz path crashes the request handler instead of
+/// answering a clean 5xx. With current pep the error legs are unreachable
+/// in practice (EntityId's FromStr is Infallible; RestrictedExpression
+/// attrs cannot fail) — the guard is the type itself.
+pub fn user_to_cedar_principal_with_groups(
+    claims: &JwtClaims,
+    extra_groups: &[String],
+) -> Result<Entity, pep::cedar::CedarError> {
     let uid = build_principal_uid(claims)?;
     let mut attrs: HashMap<String, RestrictedExpression> = HashMap::new();
 
@@ -55,24 +63,29 @@ pub fn user_to_cedar_principal(claims: &JwtClaims) -> Result<Entity, pep::cedar:
         }
     }
 
-    // Add groups (set from extra claims)
+    // Groups: the token's groups claim UNION the server-resolved PDT-native
+    // set, deduped + sorted (deterministic entity bytes — the same shape
+    // PDT's evaluate_permission hands its principal builder).
+    let mut effective: Vec<String> = Vec::new();
     if let Some(serde_json::Value::Array(groups)) = claims.extra.get("groups") {
-        let set_exprs: Vec<RestrictedExpression> = groups
-            .iter()
-            .filter_map(|g| {
-                if let serde_json::Value::String(s) = g {
-                    Some(RestrictedExpression::new_string(s.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !set_exprs.is_empty() {
-            attrs.insert(
-                "groups".to_string(),
-                RestrictedExpression::new_set(set_exprs),
-            );
+        for g in groups {
+            if let serde_json::Value::String(s) = g {
+                effective.push(s.clone());
+            }
         }
+    }
+    effective.extend(extra_groups.iter().cloned());
+    effective.sort();
+    effective.dedup();
+    if !effective.is_empty() {
+        let set_exprs: Vec<RestrictedExpression> = effective
+            .into_iter()
+            .map(RestrictedExpression::new_string)
+            .collect();
+        attrs.insert(
+            "groups".to_string(),
+            RestrictedExpression::new_set(set_exprs),
+        );
     }
 
     Entity::new(uid, attrs, HashSet::new()).map_err(|e| {

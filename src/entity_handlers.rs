@@ -696,6 +696,30 @@ async fn create_entity_inner(
             } else {
                 Vec::new()
             };
+            // Server-resolved authz (3ad59ed3, the resolve_instance_authz
+            // equivalent): charter-shaped checks (the resource carries the
+            // admin_group anchor) resolve the caller's PDT-native groups
+            // and union them with the token's groups claim — the drain
+            // (bf70097a) stops the claim and the resolved set carries
+            // principal.groups. Resolve failure degrades to the token
+            // groups (never zero while either source has material — union
+            // semantics, 147a17fc); with both sources empty the policies
+            // deny fail-closed.
+            let pdt_groups = if resource_attrs.is_empty() {
+                Vec::new()
+            } else {
+                match pdt.resolve_member_groups(&claims.sub, token).await {
+                    Ok(groups) => groups,
+                    Err(e) => {
+                        tracing::warn!(
+                            "PDT-native group resolution failed for sub {} (degrading to token groups — union semantics, 3ad59ed3): {}",
+                            claims.sub,
+                            e
+                        );
+                        Vec::new()
+                    }
+                }
+            };
             crate::cedar::enforcement::check_permission_scoped(
                 authorizer,
                 &claims,
@@ -703,6 +727,7 @@ async fn create_entity_inner(
                 &slug_to_cedar_type(&config.slug),
                 "<_>",
                 &resource_attrs,
+                &pdt_groups,
             )
             .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
         }
@@ -1307,6 +1332,24 @@ async fn update_entity_status_inner(
             } else {
                 Vec::new()
             };
+            // Server-resolved authz (3ad59ed3): charter-shaped checks
+            // resolve the caller's PDT-native groups and union them with
+            // the token's groups claim — see the create-site note.
+            let pdt_groups = if resource_attrs.is_empty() {
+                Vec::new()
+            } else {
+                match pdt.resolve_member_groups(&claims.sub, token).await {
+                    Ok(groups) => groups,
+                    Err(e) => {
+                        tracing::warn!(
+                            "PDT-native group resolution failed for sub {} (degrading to token groups — union semantics, 3ad59ed3): {}",
+                            claims.sub,
+                            e
+                        );
+                        Vec::new()
+                    }
+                }
+            };
             crate::cedar::enforcement::check_permission_scoped(
                 authorizer,
                 &claims,
@@ -1314,6 +1357,7 @@ async fn update_entity_status_inner(
                 &slug_to_cedar_type(&config.slug),
                 id,
                 &resource_attrs,
+                &pdt_groups,
             )
             .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
         }
@@ -1473,6 +1517,24 @@ async fn update_identity_content_inner(
                     )]
                 })
                 .unwrap_or_default();
+            // Server-resolved authz (3ad59ed3): charter-shaped checks
+            // resolve the caller's PDT-native groups and union them with
+            // the token's groups claim — see the create-site note.
+            let pdt_groups = if resource_attrs.is_empty() {
+                Vec::new()
+            } else {
+                match pdt.resolve_member_groups(&claims.sub, token).await {
+                    Ok(groups) => groups,
+                    Err(e) => {
+                        tracing::warn!(
+                            "PDT-native group resolution failed for sub {} (degrading to token groups — union semantics, 3ad59ed3): {}",
+                            claims.sub,
+                            e
+                        );
+                        Vec::new()
+                    }
+                }
+            };
             crate::cedar::enforcement::check_permission_scoped(
                 authorizer,
                 &claims,
@@ -1480,6 +1542,7 @@ async fn update_identity_content_inner(
                 &slug_to_cedar_type(&config.slug),
                 id,
                 &resource_attrs,
+                &pdt_groups,
             )
             .map_err(|status| (status, Json(json!({"error": "Access denied"}))))?;
         }

@@ -21,6 +21,13 @@ pub const ADMIN_GROUP_METADATA_KEY: &str = "admin_group";
 /// enforcement path (the former bare-UID `check_permission`/`is_allowed`
 /// pair was dead code and is subtracted).
 ///
+/// `pdt_groups` = the caller's server-resolved PDT-native group names
+/// (3ad59ed3, the resolve_instance_authz equivalent): the principal
+/// entity's `groups` attribute carries the UNION of the token's groups
+/// claim and this set — the drain (bf70097a) stops the claim and the
+/// resolved set carries `principal.groups`. Pass `&[]` for the claims-only
+/// form (memory paths — no resolution, no wire call).
+///
 /// Returns `Ok(())` if allowed, `Err(StatusCode::FORBIDDEN)` if denied,
 /// `Err(StatusCode::INTERNAL_SERVER_ERROR)` on evaluation errors.
 pub fn check_permission_scoped(
@@ -30,6 +37,7 @@ pub fn check_permission_scoped(
     entity_type: &str,
     entity_id: &str,
     resource_attrs: &[(String, String)],
+    pdt_groups: &[String],
 ) -> Result<(), StatusCode> {
     let principal = pep::cedar::build_principal_uid(claims).map_err(|e| {
         tracing::error!("Cedar principal build failed: {}", e);
@@ -48,7 +56,10 @@ pub fn check_permission_scoped(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let principal_entity = crate::cedar::entity::user_to_cedar_principal(claims).map_err(|e| {
+    let principal_entity = crate::cedar::entity::user_to_cedar_principal_with_groups(
+        claims, pdt_groups,
+    )
+    .map_err(|e| {
         tracing::error!("Cedar principal entity build failed: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -155,7 +166,7 @@ mod tests {
     #[test]
     fn principal_builder_returns_result_not_panic() {
         let claims = claims_with_role(Some("admin"));
-        let entity = crate::cedar::entity::user_to_cedar_principal(&claims)
+        let entity = crate::cedar::entity::user_to_cedar_principal_with_groups(&claims, &[])
             .expect("well-formed claims must build a principal entity");
         assert!(
             entity.uid().to_string().contains("user-admin"),
@@ -184,7 +195,8 @@ mod tests {
                 "CreateSemanticMemory",
                 &resource_type,
                 "<_>",
-                &[]
+                &[],
+                &[],
             ),
             Ok(())
         );
@@ -198,7 +210,8 @@ mod tests {
                 "CreateSemanticMemory",
                 &resource_type,
                 "<_>",
-                &[]
+                &[],
+                &[],
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -213,7 +226,8 @@ mod tests {
                 "CreateSemanticMemory",
                 &resource_type,
                 "<_>",
-                &[]
+                &[],
+                &[],
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -236,7 +250,8 @@ mod tests {
                 "CreateEpisodicMemory",
                 &crate::entity_config::slug_to_cedar_type("episodic-memory"),
                 "<_>",
-                &[]
+                &[],
+                &[],
             ),
             Ok(())
         );
@@ -249,7 +264,8 @@ mod tests {
                 "DeleteSemanticMemory",
                 &crate::entity_config::slug_to_cedar_type("semantic-memory"),
                 "<_>",
-                &[]
+                &[],
+                &[],
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -263,7 +279,8 @@ mod tests {
                 "CreateAgentIdentity",
                 &crate::entity_config::slug_to_cedar_type("agent-identity"),
                 "<_>",
-                &[]
+                &[],
+                &[],
             ),
             Ok(())
         );
@@ -297,7 +314,8 @@ mod tests {
                 "CreateAgentIdentity",
                 &identity,
                 "<_>",
-                &[(ADMIN_GROUP_METADATA_KEY.to_string(), ws_group.clone())]
+                &[(ADMIN_GROUP_METADATA_KEY.to_string(), ws_group.clone())],
+                &[],
             ),
             Ok(())
         );
@@ -308,7 +326,8 @@ mod tests {
                 "ViewAgentIdentity",
                 &identity,
                 "some-agent-id",
-                &[]
+                &[],
+                &[],
             ),
             Ok(())
         );
@@ -322,7 +341,8 @@ mod tests {
                 "ViewSemanticMemory",
                 &memory,
                 "some-memory-id",
-                &[]
+                &[],
+                &[],
             ),
             Ok(())
         );
@@ -333,7 +353,8 @@ mod tests {
                 "CreateSemanticMemory",
                 &memory,
                 "<_>",
-                &[]
+                &[],
+                &[],
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -346,7 +367,8 @@ mod tests {
                 "DeleteAgentIdentity",
                 &identity,
                 "some-agent-id",
-                &[]
+                &[],
+                &[],
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -399,7 +421,8 @@ mod tests {
                 "CreateAgentIdentity",
                 &identity,
                 "<_>",
-                &scoped
+                &scoped,
+                &[],
             ),
             Ok(())
         );
@@ -410,7 +433,8 @@ mod tests {
                 "EditAgentIdentity",
                 &identity,
                 "agent-abc",
-                &scoped
+                &scoped,
+                &[],
             ),
             Ok(())
         );
@@ -424,7 +448,8 @@ mod tests {
                 "EditAgentIdentity",
                 &identity,
                 "agent-abc",
-                &scoped
+                &scoped,
+                &[],
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -438,7 +463,8 @@ mod tests {
                 "CreateAgentIdentity",
                 &identity,
                 "<_>",
-                &scoped
+                &scoped,
+                &[],
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -453,6 +479,7 @@ mod tests {
                 "CreateAgentIdentity",
                 &identity,
                 "<_>",
+                &[],
                 &[]
             ),
             Err(StatusCode::FORBIDDEN)
@@ -464,9 +491,161 @@ mod tests {
                 "CreateAgentIdentity",
                 &identity,
                 "<_>",
+                &[],
                 &[]
             ),
             Ok(())
+        );
+    }
+
+    /// 3ad59ed3 acceptance — the server-resolved authz path (the
+    /// resolve_instance_authz equivalent, PDT Phase 1b pattern): with an
+    /// EMPTY groups claim (the drain shape, bf70097a) the server-resolved
+    /// PDT-native groups carry `principal.groups` and charter management
+    /// still authorizes; with the claim present the union is a superset of
+    /// today's behavior (no regression); with BOTH sources empty the
+    /// policies deny fail-closed.
+    #[test]
+    fn cedar_charter_server_resolved_groups() {
+        let authorizer = pep::cedar::CedarAuthorizer::new(test_cedar_config())
+            .expect("Cedar must initialize from embedded policy/schema");
+
+        let identity = crate::entity_config::slug_to_cedar_type("agent-identity");
+        let group = "ws-4b31ec2d-3c10-4b5d-90b5-9e92ccc77cef-admins".to_string();
+        let scoped = vec![(ADMIN_GROUP_METADATA_KEY.to_string(), group.clone())];
+        let resolved = vec![group.clone()];
+
+        // THE DRAIN SHAPE: no groups claim at all, PDT resolves the
+        // membership — create + edit both authorize.
+        let drained = claims_with_role(Some("user"));
+        assert_eq!(
+            check_permission_scoped(
+                &authorizer,
+                &drained,
+                "CreateAgentIdentity",
+                &identity,
+                "<_>",
+                &scoped,
+                &resolved
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            check_permission_scoped(
+                &authorizer,
+                &drained,
+                "EditAgentIdentity",
+                &identity,
+                "agent-abc",
+                &scoped,
+                &resolved
+            ),
+            Ok(())
+        );
+
+        // The agent's own-identity path under the drain: role=agent, no
+        // claim, resolved set carries the mem-group anchor.
+        let agent_drained = claims_with_role(Some("agent"));
+        assert_eq!(
+            check_permission_scoped(
+                &authorizer,
+                &agent_drained,
+                "EditAgentIdentity",
+                &identity,
+                "agent-abc",
+                &scoped,
+                &resolved
+            ),
+            Ok(())
+        );
+
+        // Union no-regression: claim present AND resolved set — allowed.
+        let member = claims_with_role_and_groups("user", &[&group]);
+        assert_eq!(
+            check_permission_scoped(
+                &authorizer,
+                &member,
+                "EditAgentIdentity",
+                &identity,
+                "agent-abc",
+                &scoped,
+                &resolved
+            ),
+            Ok(())
+        );
+
+        // Claim present, resolved set misses the anchor — the claim path
+        // still decides (no regression from a resolve that returns empty).
+        assert_eq!(
+            check_permission_scoped(
+                &authorizer,
+                &member,
+                "EditAgentIdentity",
+                &identity,
+                "agent-abc",
+                &scoped,
+                &[]
+            ),
+            Ok(())
+        );
+
+        // Fail-closed: empty claim AND empty resolved set → denied.
+        let groupless = claims_with_role(Some("user"));
+        assert_eq!(
+            check_permission_scoped(
+                &authorizer,
+                &groupless,
+                "CreateAgentIdentity",
+                &identity,
+                "<_>",
+                &scoped,
+                &[]
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+
+        // Outsider: claim and resolved set both miss the anchor → denied.
+        let outsider = claims_with_role_and_groups("user", &["ws-other-admins"]);
+        let outsider_resolved = vec!["ws-other-admins".to_string()];
+        assert_eq!(
+            check_permission_scoped(
+                &authorizer,
+                &outsider,
+                "EditAgentIdentity",
+                &identity,
+                "agent-abc",
+                &scoped,
+                &outsider_resolved
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
+
+    /// 3ad59ed3: the union builder carries the merged set and the
+    /// claims-only form (empty resolved set) keeps the claims groups —
+    /// the union CONTENT is pinned behaviorally by
+    /// cedar_charter_server_resolved_groups (a drained principal
+    /// authorizes only if the resolved group reached principal.groups).
+    #[test]
+    fn principal_union_groups_present_both_forms() {
+        let member = claims_with_role_and_groups("user", &["ws-b", "ws-a"]);
+        let entity = crate::cedar::entity::user_to_cedar_principal_with_groups(
+            &member,
+            &["ws-a".to_string(), "ws-c".to_string()],
+        )
+        .expect("well-formed claims must build a principal entity");
+        assert!(
+            entity.attr("groups").is_some(),
+            "union groups must be present on the principal"
+        );
+
+        // Claims-only form (empty resolved set): identical to the
+        // pre-change builder's shape.
+        let claims_only = crate::cedar::entity::user_to_cedar_principal_with_groups(&member, &[])
+            .expect("well-formed claims must build a principal entity");
+        assert!(
+            claims_only.attr("groups").is_some(),
+            "claims-only form must still carry the claims groups"
         );
     }
 }

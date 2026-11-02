@@ -67,6 +67,20 @@ pub struct AuthContext {
     pub confidentiality: String,
 }
 
+/// Resolved PDT-native group names for a principal (Phase 1b read-time
+/// membership surface — the server-resolved authz data source, 3ad59ed3).
+/// Names, not ids: charter admin_group anchors reference the canonical
+/// group name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemberGroupsResponse {
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
+    pub member_id: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
+    pub groups: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PdtAsset {
     #[serde(rename = "_id")]
@@ -369,6 +383,36 @@ impl PdtClient {
         let resp = self.req(reqwest::Method::GET, url, token).send().await?;
         let result = resp.json::<CompactSearchResponse>().await?;
         Ok(result.data)
+    }
+
+    /// Resolve a principal's PDT-native group NAMES (Phase 1b read-time
+    /// membership surface, live in PDT — the server-resolved authz data
+    /// source, 3ad59ed3).
+    ///
+    /// Names, not ids — charter admin_group anchors and bands reference the
+    /// canonical group name. Instance-scoped: PDT-native groups live per
+    /// workspace store; the caller passes the instance whose groups answer
+    /// the question. A sub with zero memberships answers 200 with an empty
+    /// set (valid, not an error); only transport/5xx is an error — callers
+    /// degrade to the token's groups claim (union semantics, never zero
+    /// while either source has material).
+    pub async fn resolve_member_groups(
+        &self,
+        sub: &str,
+        token: Option<&str>,
+        instance_id: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let url = format!("{}/api/groups/member/{}", self.base_url, sub);
+        let resp = self
+            .req_with_instance(reqwest::Method::GET, url, token, instance_id)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("PDT resolve_member_groups failed ({}): {}", status, body);
+        }
+        Ok(resp.json::<MemberGroupsResponse>().await?.groups)
     }
 
     pub async fn get_asset(&self, id: &str, token: Option<&str>) -> Result<PdtAsset> {
@@ -758,6 +802,18 @@ impl<'a> InstancePdtClient<'a> {
     pub async fn fetch_asset(&self, id: &str, token: Option<&str>) -> AssetFetch {
         self.client
             .fetch_asset(id, token, self.instance_id.as_deref())
+            .await
+    }
+
+    /// Resolve a principal's PDT-native group names in THIS instance
+    /// (see [`PdtClient::resolve_member_groups`]).
+    pub async fn resolve_member_groups(
+        &self,
+        sub: &str,
+        token: Option<&str>,
+    ) -> Result<Vec<String>> {
+        self.client
+            .resolve_member_groups(sub, token, self.instance_id.as_deref())
             .await
     }
 
