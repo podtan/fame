@@ -206,7 +206,7 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
                     "tags": ["entities"],
                     "parameters": [
                         {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
-                        {"name": "X-Instance-Id", "in": "header", "required": true, "schema": {"type": "string"}, "description": "Agent asset ID — identity content is instance-scoped (agent nested DB)"}
+                        {"name": "X-Instance-Id", "in": "header", "required": false, "schema": {"type": "string"}, "description": "Optional instance override — injected by Aether from the URL agent_id; omit it (the agent never passes agent_id). Identity content is instance-scoped (agent nested DB). A wrong value falls back to the identity's home instance, then unscoped (b8aa906b)."}
                     ],
                     "requestBody": {
                         "content": {
@@ -241,7 +241,7 @@ pub fn generate_merged_openapi(configs: &[Arc<EntityConfig>]) -> OpenApi {
                                 }
                             }
                         },
-                        "400": {"description": "Missing X-Instance-Id or content field"},
+                        "400": {"description": "Missing or non-string content field"},
                         "403": {"description": "Cedar deny — principal outside the stored admin_group"},
                         "404": {"description": "Identity not found (never create-on-miss)"}
                     }
@@ -537,6 +537,35 @@ mod tests {
             spec["info"]["version"].as_str(),
             Some(env!("CARGO_PKG_VERSION")),
             "served spec version must derive from the crate version, not a static stamp"
+        );
+    }
+
+    /// The served spec must mark X-Instance-Id OPTIONAL on the agent-identity
+    /// content-update route (b8aa906b mechanism C): a required declaration
+    /// forces spec-driven clients (the aether bridge) to demand a value the
+    /// architecture says the agent never passes (models.rs: "The agent never
+    /// sees or passes agent_id — Aether injects X-Instance-Id") — Roshan's
+    /// seat could not even send the absent-header form (the call died at the
+    /// bridge), and the forced guess (his sub) resolved the wrong store. The
+    /// GET route and the status-update route declare no such param; the
+    /// content route must match.
+    #[test]
+    fn agent_identity_content_route_marks_instance_header_optional() {
+        let file: EntityFile = toml::from_str(include_str!("../entities/identity.toml")).unwrap();
+        let api = generate_merged_openapi(&[Arc::new(file.entity)]);
+        let spec: Value = serde_json::to_value(&api).unwrap();
+
+        let patch = spec["paths"]["/api/v1/agent-identitys/{id}/content"]["patch"]
+            .as_object()
+            .expect("agent-identity content route missing from spec");
+        let params = patch["parameters"].as_array().expect("parameters array");
+        let inst = params
+            .iter()
+            .find(|p| p["name"] == "X-Instance-Id")
+            .expect("X-Instance-Id param missing from the content route");
+        assert_eq!(
+            inst["required"], false,
+            "X-Instance-Id must be OPTIONAL on the content route (b8aa906b): the absent-header form must have spec surface — the bridge injects the instance from the URL agent_id"
         );
     }
 }

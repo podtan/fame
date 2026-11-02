@@ -1433,10 +1433,27 @@ async fn update_entity_status_inner(
 /// `for_instance(None)` reads the global store — so the write path must not
 /// 400/404 on a header the read never needed. Resolution order:
 /// 1. instance-scoped fetch (when the header is present);
-/// 2. on a scoped miss, unscoped fallback fetch;
-/// 3. write in place via the instance where the asset was FOUND.
+/// 2. on a scoped miss, HOME-instance fetch (b8aa906b — see below);
+/// 3. on a home miss, unscoped fallback fetch;
+/// 4. write in place via the instance where the asset was FOUND.
 ///
-/// True absence (both lanes miss) stays a loud 404 — never create-on-miss.
+/// HOME-INSTANCE LANE (b8aa906b, 2026-11-02): an agent identity is homed at
+/// the nested DB keyed by its OWN id — the fame URL contract
+/// (https://fame.aether.tanbal.ir/{agent_id}/sse: the bridge injects
+/// agent_id as X-Instance-Id, and the identity id IS the agent asset id), so
+/// the agent's own GET resolves from that store. A caller-named instance that
+/// isn't the home (Roshan's wire: his sub passed where the spec once demanded
+/// a value) must not 404 while GET resolves — the word's acceptance case 3
+/// pins "update succeeds without a caller-named instance or with the wrong
+/// one". The home lane is tried BEFORE the unscoped fallback so the write
+/// lands where the agent's own reads resolve (a stale global copy must not
+/// win the write). Cedar still gates the write on the STORED admin_group
+/// metadata — the lane change cannot widen the isolation boundary (word
+/// invariant 1). An unprovisioned home DB is absence on the wire (PDT
+/// 44b13a5f: NotProvisioned → 404), so the lane degrades to NotFound — never
+/// a spurious 500.
+///
+/// True absence (all lanes miss) stays a loud 404 — never create-on-miss.
 /// The Cedar gate anchors on the FOUND asset's STORED admin_group metadata,
 /// never a caller header — the fallback cannot widen the isolation boundary.
 async fn update_identity_content_inner(
@@ -1455,10 +1472,11 @@ async fn update_identity_content_inner(
         )
     })?;
 
-    // Asset resolution — scoped first, unscoped fallback (word cb8f70e8).
-    // With the header absent the first fetch IS the unscoped read, so a miss
-    // there is true absence — no second call. Transport/decode failures are
-    // NOT absence (0473c444) and surface as loud 500s on both lanes.
+    // Asset resolution — scoped first, home-instance second, unscoped
+    // fallback (word cb8f70e8 + acceptance case 3; b8aa906b). With the header
+    // absent the first fetch IS the unscoped read, so a miss there is true
+    // absence — no second call. Transport/decode failures are NOT absence
+    // (0473c444) and surface as loud 500s on every lane.
     let scoped_pdt = state.pdt.for_instance(instance_id);
     let (asset, resolved_instance) = match scoped_pdt.fetch_asset(id, token).await {
         AssetFetch::Found(asset) => (*asset, instance_id.map(str::to_string)),
@@ -1467,21 +1485,55 @@ async fn update_identity_content_inner(
                 slug = %slug,
                 asset_id = %id,
                 instance = %instance_id.unwrap_or_default(),
-                "identity update: scoped fetch missed — unscoped fallback resolve"
+                "identity update: scoped fetch missed — fallback resolve"
             );
-            match state.pdt.for_instance(None).fetch_asset(id, token).await {
-                AssetFetch::Found(asset) => (*asset, None),
-                AssetFetch::NotFound => {
-                    return Err((
-                        StatusCode::NOT_FOUND,
-                        Json(json!({"error": format!("Agent identity not found: {id}")})),
-                    ))
-                }
-                AssetFetch::Failed(e) => {
+            // HOME-INSTANCE LANE (b8aa906b): try the id-keyed nested DB (the
+            // bridge-URL contract) — UUID ids ONLY: a non-UUID id cannot key
+            // a store (PDT validate_uuid → InvalidId → 400) and would
+            // surface as a spurious Failed → 500; non-UUID ids skip straight
+            // to the unscoped fallback (the update boundary keeps its
+            // loud-404-for-unknown semantics — unknown_identity_is_loud_404).
+            let home_fetch = match uuid::Uuid::parse_str(id) {
+                Ok(_) => Some(
+                    state
+                        .pdt
+                        .for_instance(Some(id))
+                        .fetch_asset(id, token)
+                        .await,
+                ),
+                Err(_) => None,
+            };
+            match home_fetch {
+                Some(AssetFetch::Found(asset)) => (*asset, Some(id.to_string())),
+                Some(AssetFetch::Failed(e)) => {
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({"error": e.to_string()})),
                     ))
+                }
+                _ => {
+                    if matches!(home_fetch, Some(AssetFetch::NotFound)) {
+                        tracing::info!(
+                            slug = %slug,
+                            asset_id = %id,
+                            "identity update: home-instance fetch missed — unscoped fallback resolve"
+                        );
+                    }
+                    match state.pdt.for_instance(None).fetch_asset(id, token).await {
+                        AssetFetch::Found(asset) => (*asset, None),
+                        AssetFetch::NotFound => {
+                            return Err((
+                                StatusCode::NOT_FOUND,
+                                Json(json!({"error": format!("Agent identity not found: {id}")})),
+                            ))
+                        }
+                        AssetFetch::Failed(e) => {
+                            return Err((
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error": e.to_string()})),
+                            ))
+                        }
+                    }
                 }
             }
         }
@@ -2979,6 +3031,178 @@ mod identity_content_tests {
         .expect("service principal may bootstrap identity");
         assert_eq!(resp.0, StatusCode::CREATED);
         assert_eq!(resp.1 .0["content"], NEW);
+    }
+
+    /// HOME-INSTANCE RESOLVE (b8aa906b; word cb8f70e8 acceptance case 3,
+    /// "with the wrong one" leg): an identity homed at the nested DB keyed by
+    /// its OWN id (the real topology — the bridge URL /{agent_id}/sse injects
+    /// agent_id as X-Instance-Id, and the identity id IS the agent asset id)
+    /// must resolve on a WRONG caller-named instance. The old two-lane
+    /// fallback (scoped → unscoped) 404'd here on prod: Roshan's sub-keyed
+    /// scoped fetch missed and the global store holds no copy of an
+    /// instance-homed identity — the green suite missed it because the
+    /// existing fallback test seeds the GLOBAL store. The home lane resolves
+    /// it and the write lands IN THE HOME INSTANCE — where the agent's own
+    /// GET reads. Real tier only: the home lane needs true nested-DB routing
+    /// (the mock tier is process-global; the scoped fetch already resolves
+    /// every id there — the wrong_instance sibling covers that shape).
+    #[tokio::test]
+    async fn wrong_instance_header_resolves_home_instance() {
+        let env = test_env().await;
+        if !env.real_tier {
+            // Mock tier: process-global store — the scoped fetch resolves
+            // every id; the home lane never fires (unrepresentable).
+            return;
+        }
+
+        // Real-topology seed: provision a nested DB keyed by X, then ADOPT an
+        // identity asset with id X INTO it — identity id == home DB key, the
+        // bridge-URL contract. Adopt custody is platform-admin; the fixture
+        // runs AUTH_ENABLED=false + DEV_MODE=true (mock claims role=admin).
+        let http = reqwest::Client::new();
+        let home = uuid::Uuid::new_v4().to_string();
+        let r = http
+            .post(format!("{}/api/instances/{}/provision", env.base, home))
+            .send()
+            .await
+            .expect("provision home instance");
+        assert!(r.status().is_success(), "home provision");
+        let r = http
+            .post(format!("{}/api/assets/{}/adopt", env.base, home))
+            .header("X-Instance-Id", &home)
+            .json(&serde_json::json!({
+                "title": "Identity: Home Charter",
+                "content": OLD,
+                "tags": [
+                    {"category": "type", "value": "agent-identity"},
+                    {"category": "agent", "value": home}
+                ],
+                "metadata": {"admin_group": ADMIN_GROUP},
+                "provenance": "fame-home-instance-test-20261102T000000Z.db"
+            }))
+            .send()
+            .await
+            .expect("adopt home-homed identity");
+        assert!(r.status().is_success(), "home adopt: {}", r.status());
+
+        // WRONG instance header — a valid-but-different provisioned leaf
+        // (the Roshan shape: his sub passed where the home id was meant).
+        let wrong_instance = uuid::Uuid::new_v4().to_string();
+        let r = http
+            .post(format!(
+                "{}/api/instances/{}/provision",
+                env.base, wrong_instance
+            ))
+            .send()
+            .await
+            .expect("provision wrong-instance leaf");
+        assert!(r.status().is_success(), "wrong-instance provision");
+
+        let resp = call(
+            &env,
+            &user_with("user", &[ADMIN_GROUP]),
+            Some(&wrong_instance),
+            &home,
+            body(NEW),
+        )
+        .await
+        .expect("wrong-header update must resolve via the home-instance lane");
+        assert_eq!(resp.0["content"], NEW, "content landed via the home lane");
+        assert_eq!(
+            resp.0["content_hash"]["old"],
+            sha_hex(OLD),
+            "old hash echoes"
+        );
+        assert_eq!(
+            resp.0["content_hash"]["new"],
+            sha_hex(NEW),
+            "new hash echoes"
+        );
+
+        // The write landed IN THE HOME INSTANCE — where the agent's own GET
+        // resolves — and created no global copy.
+        let home_read = env
+            .state
+            .pdt
+            .for_instance(Some(&home))
+            .get_asset(&home, None)
+            .await
+            .expect("home-instance read after write");
+        assert_eq!(home_read.content, NEW, "write landed in the home instance");
+        assert!(
+            env.state
+                .pdt
+                .for_instance(None)
+                .get_asset(&home, None)
+                .await
+                .is_err(),
+            "no global copy: an instance-homed identity stays instance-homed"
+        );
+    }
+
+    /// WORD INVARIANT 1 on the home lane (b8aa906b): the home-instance
+    /// fallback must not widen the isolation boundary — a cross-agent caller
+    /// (wrong header, foreign identity homed at its own id) resolves through
+    /// the home lane and Cedar must still DENY the edit, anchored on the
+    /// STORED admin_group metadata. Real tier only (the home lane needs true
+    /// nested-DB routing; the cross-agent sibling covers the global lane on
+    /// both tiers).
+    #[tokio::test]
+    async fn home_instance_fallback_cedar_gate_holds_cross_agent() {
+        let env = test_env().await;
+        if !env.real_tier {
+            return; // home lane unrepresentable on the process-global mock
+        }
+
+        let http = reqwest::Client::new();
+        let home = uuid::Uuid::new_v4().to_string();
+        let r = http
+            .post(format!("{}/api/instances/{}/provision", env.base, home))
+            .send()
+            .await
+            .expect("provision home instance");
+        assert!(r.status().is_success(), "home provision");
+        let r = http
+            .post(format!("{}/api/assets/{}/adopt", env.base, home))
+            .header("X-Instance-Id", &home)
+            .json(&serde_json::json!({
+                "title": "Identity: Foreign Home Charter",
+                "content": OLD,
+                "tags": [
+                    {"category": "type", "value": "agent-identity"},
+                    {"category": "agent", "value": home}
+                ],
+                "metadata": {"admin_group": ADMIN_GROUP},
+                "provenance": "fame-home-instance-test-20261102T000000Z.db"
+            }))
+            .send()
+            .await
+            .expect("adopt home-homed identity");
+        assert!(r.status().is_success(), "home adopt: {}", r.status());
+
+        // Cross-agent caller + wrong instance header: the home lane RESOLVES
+        // the asset, and Cedar must deny the edit (the word's invariant 1 —
+        // the fallback must not widen the isolation boundary).
+        let wrong_instance = uuid::Uuid::new_v4().to_string();
+        let err = call(
+            &env,
+            &user_with("agent", &["mem-someoneelse"]),
+            Some(&wrong_instance),
+            &home,
+            body("hijack via home lane"),
+        )
+        .await
+        .expect_err("home-lane-found asset must still be Cedar-gated");
+        assert_eq!(err.0, StatusCode::FORBIDDEN, "Cedar decision");
+        assert_eq!(err.1 .0["error"], "Access denied", "Cedar decision body");
+        let read = env
+            .state
+            .pdt
+            .for_instance(Some(&home))
+            .get_asset(&home, None)
+            .await
+            .unwrap();
+        assert_eq!(read.content, OLD, "denied write must not land");
     }
 }
 
