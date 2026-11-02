@@ -5,6 +5,38 @@ All notable changes to Fame are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.21] - 2026-11-02
+
+### Fixed
+- Identity resolve order + optional X-Instance-Id spec (b8aa906b, CPO
+  release word 2026-11-02 — word cb8f70e8 acceptance case 3): the word's
+  acceptance case 3 pins "update succeeds without a caller-named instance
+  or with the wrong one" — the unscoped-only fallback could not satisfy
+  the wrong-instance leg for instance-homed identities (the green suite
+  missed it: the existing fallback test seeds the GLOBAL store; real
+  identities are homed at the nested DB keyed by their own id — the
+  bridge-URL contract). Resolve now tries: scoped fetch → HOME-instance
+  fetch (id-keyed nested DB, UUID ids only — a non-UUID id cannot key a
+  store and would surface as a spurious 500) → unscoped fallback → loud
+  404; the home lane runs BEFORE the unscoped fallback so the write lands
+  where the agent's own GET resolves. X-Instance-Id is OPTIONAL on the
+  content route (required:true contradicted models.rs "the agent never
+  passes agent_id — Aether injects"; the absent-header form had no spec
+  surface — the call died at the bridge). Guards:
+  wrong_instance_header_resolves_home_instance (real-topology shape via
+  adopt-by-id), home_instance_fallback_cedar_gate_holds_cross_agent,
+  agent_identity_content_route_marks_instance_header_optional. The suite
+  pins BOTH identity topologies (instance-homed + global-homed).
+- OpenAPI artifact dumps from the full served config set (b8aa906b rider;
+  05ee9d60 bundled-spec drift class): docs/openapi.json now generates from
+  every entity config loaded at boot (test_configs gained identity.toml —
+  main.rs loads every toml in the entities dir): 13 paths (was 9), all
+  four agent-identity routes IN the artifact, content route carries
+  X-Instance-Id required:false; guard added to
+  generated_spec_carries_list_bound_surface (asserts the artifact's
+  content route + optional param). The artifact matches what is served;
+  re-pulls cannot re-lock the contract at the bridge.
+
 ## [0.3.20] - 2026-11-02
 
 ### Added
